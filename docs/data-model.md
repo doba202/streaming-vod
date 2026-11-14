@@ -62,9 +62,10 @@ Mọi chuyển trạng thái đi qua `catalog.CanTransition` trong cùng transac
 | `video.processing` | transcoder | `api` | `{"video_id"}` |
 | `video.transcoded` | transcoder | `api` | `{"video_id","duration_s","hls_prefix","renditions":[{"height","bitrate_kbps","playlist_key"}],"poster_key","sprite_key"}` |
 | `video.failed` | transcoder | `api` | `{"video_id","reason"}` |
-| `playback.events` | api | (analytics, M6) | `{"ts","user_id","video_id","type","position_s","bitrate_kbps","buffering_ms"}` |
+| `playback.events` | api | `analytics-playback` | `{"ts","user_id","video_id","type","position_s","bitrate_kbps","buffering_ms"}` |
+| `app.logs` | api, transcoder worker | `analytics-logs` | một dòng log JSON của `slog` (`time`, `level`, `msg`, `service`, `request_id`, `video_id`, …), không có key |
 
-Key message = `video_id`, riêng `playback.events` key = `user_id` (giữ thứ tự sự kiện của một người xem). Mỗi topic 3 partition. `app.logs` đã tạo sẵn, dùng từ M6. `poster_key` / `sprite_key` có từ M5 (bỏ khỏi JSON khi rỗng).
+Key message = `video_id`, riêng `playback.events` key = `user_id` (giữ thứ tự sự kiện của một người xem). Mỗi topic 3 partition. `app.logs` có từ M6. `poster_key` / `sprite_key` có từ M5 (bỏ khỏi JSON khi rỗng).
 
 Ví dụ `playback.events`:
 
@@ -88,3 +89,36 @@ Ví dụ `video.uploaded.dlq`:
 {"video_id":"7c1e…","payload":{"video_id":"7c1e…","raw_key":"7c1e…/source.mp4"},
  "error":"transcode: input has no video stream","attempts":1,"failed_at":"2026-11-14T10:00:00Z"}
 ```
+
+Ví dụ `app.logs`:
+
+```json
+{"time":"2026-11-15T10:05:00.123Z","level":"INFO","msg":"http request","service":"api",
+ "request_id":"3dff344481165cebcf48ff9be68dcea3","method":"GET","path":"/api/videos/7c1e…/play",
+ "status":200,"duration_ms":4,"video_id":"7c1e…"}
+```
+
+## ClickHouse (M6)
+
+Database `streamfilm`. `analytics` tạo bảng khi khởi động (`internal/analytics/schema.go`, idempotent):
+
+```sql
+CREATE TABLE IF NOT EXISTS playback_events (
+  ts DateTime64(3, 'UTC'), user_id UUID, video_id UUID, type LowCardinality(String),
+  position_s UInt32, bitrate_kbps UInt32, buffering_ms UInt32
+) ENGINE = MergeTree ORDER BY (video_id, ts)
+SETTINGS non_replicated_deduplication_window = 1000;
+
+CREATE TABLE IF NOT EXISTS app_logs (
+  ts DateTime64(3, 'UTC'), service LowCardinality(String), level LowCardinality(String),
+  msg String, request_id String, video_id String, attrs String
+) ENGINE = MergeTree ORDER BY (service, ts)
+TTL toDateTime(ts) + INTERVAL 30 DAY
+SETTINGS non_replicated_deduplication_window = 1000;
+```
+
+- `playback_events`: một row cho mỗi sự kiện của `playback.events`, `user_id`/`video_id` chữ thường. Có thể có row trùng khi analytics chết giữa INSERT và commit ([ADR 0017](decisions/0017-analytics-at-least-once.md)).
+- `app_logs`: `time` của dòng log → `ts`; `level`, `msg`, `service`, `request_id`, `video_id` thành cột (thiếu thì chuỗi rỗng); mọi trường còn lại thành JSON trong `attrs` (đọc bằng `JSONExtractString(attrs, 'path')`, `JSONExtractInt(attrs, 'status')`…). Giữ 30 ngày.
+- Giờ lưu UTC; analytics gửi dạng `YYYY-MM-DD hh:mm:ss.sss`.
+
+SQL mẫu: `scripts/analytics/*.sql` (chạy bằng `make analytics-sql`, xem [operations](operations.md#analytics-và-log-m6)).

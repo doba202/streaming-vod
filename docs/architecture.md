@@ -17,9 +17,13 @@ flowchart LR
   Viewer[Trình duyệt: SPA React + hls.js] -->|"/ , /api/… , /cdn/…"| N[nginx :8088]
   N -->|"/api/ (proxy)"| API
   N -->|"/cdn/s/… secure_link_md5 hợp lệ"| S3
+  API -->|"playback.events, app.logs"| K
+  T -->|app.logs| K
+  K --> AN[analytics]
+  AN -->|"INSERT theo lô (HTTP 8123)"| CH[(ClickHouse)]
 ```
 
-Phần đã chạy tới M5: `api` (đăng ký/đăng nhập, catalog, tìm kiếm không dấu, `/play` kèm phụ đề / thumbnails / `resume_at`, hàng "Xem tiếp", nhận sự kiện xem, upload video và phụ đề cho admin, consumer trạng thái, job dọn upload bỏ dở), `transcoder worker` (HLS + poster + sprite), Postgres, Kafka, MinIO, nginx (cổng vào duy nhất: SPA, proxy API, CDN ký URL), web người xem `web/app`. Chưa có: analytics service và ClickHouse (M6 — `playback.events` đã được publish), trang admin (M7).
+Phần đã chạy tới M6: `api` (đăng ký/đăng nhập, catalog, tìm kiếm không dấu, `/play` kèm phụ đề / thumbnails / `resume_at`, hàng "Xem tiếp", nhận sự kiện xem, upload video và phụ đề cho admin, consumer trạng thái, job dọn upload bỏ dở), `transcoder worker` (HLS + poster + sprite), `analytics` (`playback.events` và `app.logs` → ClickHouse), Postgres, Kafka, MinIO, ClickHouse, nginx (cổng vào duy nhất: SPA, proxy API, CDN ký URL), web người xem `web/app`. Chưa có: trang admin (M7).
 
 ## api
 
@@ -64,6 +68,7 @@ Chế độ `transcoder file -in … -id …` của M1 vẫn dùng được đ�
 - Consumer (cả `api` và `transcoder`) tắt auto-commit, commit offset của từng record **sau khi** handler xử lý xong. Nếu handler lỗi (DB hoặc Kafka chập chờn), record đó được thử lại tại chỗ với giãn cách 1s → 30s; không bỏ qua, không làm crash process.
 - Do đó giao nhận là *at-least-once*: handler phải idempotent. `api` bỏ qua sự kiện làm chuyển trạng thái không hợp lệ (ví dụ `video.transcoded` khi video đã `ready`).
 - Ghi Postgres rồi publish Kafka là dual-write, chấp nhận ở MVP ([ADR 0007](decisions/0007-accept-dual-write.md)).
+- `analytics` (M6) không dùng `events.Consumer` (commit từng record) mà poll theo lô và commit cả lô sau INSERT; record hỏng được bỏ qua thay vì thử lại mãi, vì dữ liệu phân tích không đáng chặn cả partition ([ADR 0017](decisions/0017-analytics-at-least-once.md)).
 
 ## Web người xem và nginx
 
@@ -79,6 +84,12 @@ Player: gọi `/play`, nạp URL ký vào hls.js. Lỗi `403` (URL hết hạn h
 - **Sprite khi tua:** `/play` trả `thumbnails_url`. Player tải `thumbnails.vtt`, resolve đường dẫn sprite theo URL của chính file VTT (vẫn dưới prefix ký) và hiện thanh tua phụ `SeekPreview` dưới video: rê chuột hiện ô sprite (`background-position`) và mốc thời gian, bấm hoặc ←/→ để tua. Thanh điều khiển gốc của `<video>` giữ nguyên.
 - **Phụ đề:** admin upload `.srt`/`.vtt` (≤ 1 MiB, UTF-8) qua `POST /api/admin/videos/{id}/subtitles`; api chuyển SRT → VTT, ghi `hls/{id}/subs/{lang}.vtt` (Content-Type `text/vtt`) và upsert bảng `subtitles`. `/play` trả `subtitles: [{lang,label,url}]` với URL ký; player thêm `<track kind="subtitles">`. nginx không cache `subs/` để bản upload lại có hiệu lực ngay ([ADR 0014](decisions/0014-subtitles-srt-to-vtt.md)).
 - **Sự kiện xem và "Xem tiếp":** `PlaybackReporter` (web) gửi `play`, `pause`, `seek`, `ended`, `buffering` (thời gian chờ) và `heartbeat` mỗi 10 giây khi đang phát; rời trang thì gửi heartbeat vị trí cuối (`fetch` `keepalive`). api ghi `watch_progress` cho heartbeat/pause/ended, publish mọi sự kiện lên `playback.events` (key `user_id`) ở nền — Kafka chết thì sự kiện bị bỏ, request vẫn `204` ([ADR 0015](decisions/0015-playback-events-best-effort.md)). "Xem tiếp" = `5% < position/duration < 95%`, mới xem nhất trước, tối đa 20; `resume_at` = vị trí đã lưu (0 nếu chưa xem hoặc đã xem ≥ 95%).
+
+## Analytics và log (M6)
+
+- **Log:** mọi service dựng logger bằng `logging.New(service, stdout, sink)`: JSON của `slog`, luôn có `service`; `request_id` được thêm từ ctx (middleware `RequestID` của chi, qua nginx là `$request_id`) khi gọi `…Context(r.Context(), …)`; dòng `http request` có thêm `video_id` khi route có `{id}` là UUID. `api` và `transcoder worker` ghi mỗi dòng ra stdout **và** `logging.KafkaSink` → topic `app.logs`: `TryProduce` của franz-go trên client riêng (buffer 4096 dòng, acks leader, hạn giao 5 giây) — buffer đầy hoặc Kafka chết thì dòng bị bỏ và đếm `Dropped`, không bao giờ chặn request. `analytics` chỉ log ra stdout để không tự nuôi `app.logs` ([ADR 0018](decisions/0018-app-logs-async-sink.md)).
+- **analytics:** hai pipeline độc lập, mỗi cái một consumer group: `analytics-playback` (`playback.events` → `playback_events`) và `analytics-logs` (`app.logs` → `app_logs`). Gom record thành lô, ghi khi đủ 1000 record hoặc 1 giây sau record đầu tiên của lô, và khi tắt. Ghi bằng `INSERT … FORMAT JSONEachRow` qua HTTP interface (cổng 8123), không dùng driver native ([ADR 0016](decisions/0016-clickhouse-http-startup-schema.md)). Bảng được tạo (`CREATE TABLE IF NOT EXISTS`) mỗi lần khởi động.
+- **Giao nhận:** offset chỉ commit sau khi INSERT thành công (at-least-once). ClickHouse lỗi → thử lại cùng lô mãi với giãn cách 1s → 30s, không bỏ; lô gửi lại mang cùng `insert_deduplication_token` nên retry sau timeout không ghi trùng. Record hỏng (JSON sai, `user_id`/`video_id` không phải UUID, số âm) bị bỏ qua, log `skip invalid record`, vẫn commit — một row sai kiểu làm ClickHouse từ chối cả lô ([ADR 0017](decisions/0017-analytics-at-least-once.md)).
 
 ## Tìm kiếm
 
@@ -118,3 +129,4 @@ hls/{id}/subs/{lang}.vtt               (M5, phụ đề do admin upload, ghi đ�
 | User/Auth service | module `auth` trong `api` (bcrypt, JWT trong cookie HttpOnly) |
 | Search | Postgres full-text + `unaccent` + `pg_trgm` trong module `catalog` |
 | Client apps (web) | SPA React + hls.js phục vụ bởi nginx cùng origin với API |
+| Analytics / logging | `analytics` consume `playback.events` + `app.logs`, ghi lô vào ClickHouse |

@@ -6,17 +6,20 @@
 |---|---|
 | `make up` / `make down` | Dựng (build lại image api/transcoder/nginx kèm web) / tắt toàn bộ stack |
 | `make ps` / `make logs` | Trạng thái / log mọi container |
-| `make logs-app` | Log của `api`, `transcoder` và `nginx` |
+| `make logs-app` | Log của `api`, `transcoder`, `analytics` và `nginx` |
 | `make seed-admin` | Tạo/đặt lại admin `ADMIN_EMAIL` / `ADMIN_PASSWORD` (trong `.env`) bên trong container api |
 | `make e2e-m2` | E2E: đăng nhập admin, upload `tmp/sample.mp4` → đợi `ready` → kiểm tra HLS qua URL ký |
 | `make e2e-m3` | E2E: 401/403, register/login/logout, `/play`, URL ký → 200, sửa chữ ký / hết hạn / traversal → 403 (chạy kèm `e2e-m2`) |
 | `make e2e-m4` | E2E: SPA và fallback route qua nginx, `/api/` cùng origin (cookie), upload video tiêu đề tiếng Việt, tìm không dấu / có dấu / gõ sai / lọc thể loại, `/play` cùng origin |
+| `make e2e-m5` | E2E: poster/sprite, phụ đề, sự kiện xem → "Xem tiếp", `playback.events` trong Kafka (`KAFKA_DOWN=1`: thử Kafka chết) |
+| `make e2e-m6` | E2E: sự kiện xem và log api/transcoder vào ClickHouse, record hỏng bị bỏ qua, SQL mẫu có kết quả (`CH_DOWN=1`: dừng ClickHouse, analytics thử lại, không mất sự kiện) |
+| `make analytics-sql [Q=tên]` | Chạy SQL mẫu `scripts/analytics/*.sql` trên ClickHouse (mặc định tất cả) |
 | `make web-install` / `make web-test` / `make web-build` | `npm ci` / Vitest / build production cho `web/app` (cần Node 20.19+) |
 | `make web-dev` | Vite dev server http://localhost:5173 (hot reload), proxy `/api` và `/cdn` sang nginx `:8088` (cần `make up`) |
 | `make sign-url ID=…` | In URL CDN đã ký (2 giờ) cho video `ID` (dòng đầu là URL, dòng sau là thời điểm hết hạn), dùng với dev player hoặc video từ `make transcode` |
 | `make sample` | Sinh `tmp/sample.mp4` |
-| `make build` | Build `bin/api`, `bin/transcoder` |
-| `make run-api` / `make run-worker` | Chạy api / worker trên host để dev (dừng service cùng tên trong compose trước: `docker compose -f deploy/docker-compose.yml --env-file .env stop api transcoder`) |
+| `make build` | Build `bin/api`, `bin/transcoder`, `bin/analytics` |
+| `make run-api` / `make run-worker` / `make run-analytics` | Chạy api / worker / analytics trên host để dev (dừng service cùng tên trong compose trước: `docker compose -f deploy/docker-compose.yml --env-file .env stop api transcoder analytics`) |
 | `make transcode FILE=… ID=…` | Transcode một file không qua Kafka (chế độ M1) |
 
 `make up` chạy `up -d --build` rồi `up -d --wait` cho các service chạy lâu. Các container one-shot (`minio-init`, `kafka-init`) thoát với mã 0 nên không dùng `--wait` cho chúng. `api` có healthcheck (`/healthz`) nên `--wait` đợi tới khi healthy; `transcoder` không có healthcheck nên `--wait` chỉ đợi container chạy. `api` tự chạy migration khi khởi động.
@@ -86,7 +89,7 @@ docker compose -f deploy/docker-compose.yml --env-file .env exec postgres psql -
   "select u.email, w.video_id, w.position_s, w.duration_s, w.updated_at from watch_progress w join users u on u.id = w.user_id order by w.updated_at desc limit 10"
 ```
 
-- Đọc `playback.events` (đến M6 chưa có consumer; Redpanda Console → Topics → `playback.events` cũng xem được):
+- Đọc `playback.events` thô (Redpanda Console → Topics → `playback.events` cũng xem được; từ M6 dữ liệu đã nằm trong ClickHouse, xem mục dưới):
 
 ```bash
 docker compose -f deploy/docker-compose.yml --env-file .env exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
@@ -95,10 +98,49 @@ docker compose -f deploy/docker-compose.yml --env-file .env exec kafka /opt/kafk
 
 - Thử Kafka chết: `make e2e-m5 KAFKA_DOWN=1` (dừng kafka, gửi sự kiện — vẫn `204`, tiến độ vẫn ghi — rồi bật lại). Log api có `playback event dropped`.
 
+## Analytics và log (M6)
+
+`make up` chạy thêm `analytics` (không có healthcheck; `--wait` chỉ đợi container chạy). Nó tạo bảng ClickHouse khi khởi động rồi đọc `playback.events` và `app.logs` từ đầu (lần đầu đọc cả sự kiện từ M5).
+
+Biến môi trường (M6, `make env` tự thêm vào `.env`):
+
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `CLICKHOUSE_URL` | `http://localhost:8123` | HTTP interface; trong compose là `http://clickhouse:8123` |
+| `CLICKHOUSE_DB` / `CLICKHOUSE_USER` | `streamfilm` / `streamfilm` | |
+| `CLICKHOUSE_PASSWORD` | `streamfilm` | Phải bằng `POSTGRES_PASSWORD` (service `clickhouse` lấy mật khẩu từ biến đó) |
+
+SQL mẫu (`scripts/analytics/`, mỗi file một câu, dòng đầu là mô tả):
+
+| File | Câu hỏi |
+|---|---|
+| `top_videos.sql` | Top 10 phim theo lượt play, kèm số người xem khác nhau |
+| `completion_rate.sql` | Tỉ lệ xem hết = người có `ended` / người có `play`, theo phim |
+| `buffering_by_bitrate.sql` | Số lần, tổng và trung bình thời gian buffering theo `bitrate_kbps` |
+| `logs_by_service.sql` | Số dòng log theo service và level trong 24 giờ |
+
+```bash
+make analytics-sql                 # chạy tất cả, bảng PrettyCompact
+make analytics-sql Q=top_videos    # một câu
+```
+
+Truy vấn tay (Play UI http://localhost:8123/play, user `streamfilm`, mật khẩu `POSTGRES_PASSWORD`; hoặc `clickhouse-client` trong container):
+
+```bash
+docker compose -f deploy/docker-compose.yml --env-file .env exec clickhouse clickhouse-client \
+  --user streamfilm --password streamfilm -d streamfilm -q \
+  "SELECT ts, service, level, msg, request_id FROM app_logs WHERE level IN ('WARN','ERROR') ORDER BY ts DESC LIMIT 20"
+```
+
+- Lần theo một request: lấy `request_id` từ dòng `http request` (nginx sinh `$request_id`), rồi `SELECT ts, msg, attrs FROM app_logs WHERE request_id = '…' ORDER BY ts`.
+- Mọi log của một video: `SELECT ts, service, msg FROM app_logs WHERE video_id = '…' ORDER BY ts` (dòng `http request` của route `/{id}`, log transcoder, log lỗi của handler).
+- Log của chính `analytics` chỉ có ở `make logs-app` (stdout), không có trong `app_logs` ([ADR 0018](decisions/0018-app-logs-async-sink.md)).
+- Thử ClickHouse chết: `make e2e-m6 CH_DOWN=1`. Trong lúc ClickHouse tắt, log analytics có `clickhouse insert failed, retrying` (giãn cách tới 30 giây), lag của group `analytics-*` tăng; bật lại thì lô được ghi và lag về 0.
+
 ## Theo dõi Kafka
 
 - Redpanda Console → **Topics** → chọn topic → tab Messages: xem key (`video_id`) và JSON.
-- **Consumer Groups**: `api` (đọc `video.processing|transcoded|failed`) và `transcoder` (đọc `video.uploaded`). Lag khác 0 kéo dài nghĩa là consumer đang kẹt; xem `make logs-app`.
+- **Consumer Groups**: `api` (đọc `video.processing|transcoded|failed`), `transcoder` (đọc `video.uploaded`), `analytics-playback` (đọc `playback.events`) và `analytics-logs` (đọc `app.logs`). Lag khác 0 kéo dài nghĩa là consumer đang kẹt; xem `make logs-app`.
 - DLQ: topic `video.uploaded.dlq`. Mỗi message có `payload` gốc, `error`, `attempts`. Sau khi sửa nguyên nhân, gọi `POST /api/admin/videos/{id}/retry`.
 
 ## Truy vấn nhanh Postgres
@@ -142,6 +184,9 @@ Lần đầu `MISS`, các lần sau `HIT`.
 | Phụ đề không hiện | Chọn phụ đề trong menu CC của player; kiểm tra `/play` có `subtitles` và URL `.vtt` trả `200 text/vtt` |
 | Hàng "Xem tiếp" trống | Mới xem < 5% hoặc đã ≥ 95% thời lượng, hoặc chưa có heartbeat (cần phát ≥ 10 giây, hoặc pause) |
 | Tìm "tro choi" không ra video vừa upload | Video chưa `ready`, hoặc api chưa chạy migration `0003_search` (xem `schema_migrations`) |
+| `make analytics-sql` báo `Authentication failed` | `CLICKHOUSE_PASSWORD` trong `.env` khác `POSTGRES_PASSWORD` (mật khẩu của service `clickhouse`) |
+| `playback_events` / `app_logs` không có row mới | `make ps` (analytics chạy chưa?), `make logs-app` tìm `clickhouse insert failed`; Redpanda Console → Consumer Groups `analytics-*` xem lag |
+| Log analytics có `skip invalid record` | Record trong topic không đúng schema (JSON hỏng, id không phải UUID): đã bỏ qua và commit, không cần xử lý; `make e2e-m6` cố ý ghi một record như vậy |
 | Video kẹt ở `queued` | `transcoder` không chạy hoặc lag: `make ps`, `make logs-app`, tab Consumer Groups |
 | Video `failed` | Xem `fail_reason` qua `GET /api/admin/videos?status=failed` và message trong DLQ |
 | `make run-api` báo cổng 8000 đã dùng | Dừng service `api` trong compose trước |

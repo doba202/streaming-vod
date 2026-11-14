@@ -2,7 +2,7 @@
 
 Nền tảng xem phim theo yêu cầu (VOD) dựng để học system design: upload, transcode HLS nhiều độ phân giải, phân phối qua CDN có ký URL, xem tiếp, tìm kiếm, analytics qua Kafka và ClickHouse.
 
-Trạng thái: **M5** — upload và transcode qua Kafka (M2); đăng nhập bằng cookie JWT, `/play` trả URL ký, nginx chặn URL sai hoặc hết hạn (M3); web người xem (trang chủ, chi tiết, player hls.js, tìm kiếm không dấu) chạy cùng origin sau nginx (M4); poster, ảnh xem trước khi tua (sprite), phụ đề nhiều ngôn ngữ, hàng "Xem tiếp" và sự kiện xem lên Kafka (M5). Xem lộ trình trong [spec](docs/superpowers/specs/2026-11-14-streamfilm-vod-mvp-design.md#10-các-giai-đoạn).
+Trạng thái: **M5** — upload và transcode qua Kafka (M2); đăng nhập bằng cookie JWT, `/play` trả URL ký, nginx chặn URL sai hoặc hết hạn (M3); web người xem (trang chủ, chi tiết, player hls.js, tìm kiếm không dấu) chạy cùng origin sau nginx (M4); poster, ảnh xem trước khi tua (sprite), phụ đề nhiều ngôn ngữ, hàng "Xem tiếp" và sự kiện xem lên Kafka (M5); service `analytics` đưa sự kiện xem và log của api/transcoder vào ClickHouse, có SQL phân tích mẫu (M6). Xem lộ trình trong [spec](docs/superpowers/specs/2026-11-14-streamfilm-vod-mvp-design.md#10-các-giai-đoạn).
 
 ## Yêu cầu
 
@@ -15,10 +15,12 @@ Trạng thái: **M5** — upload và transcode qua Kafka (M2); đăng nhập b�
 ## Chạy nhanh
 
 ```bash
-make up          # dựng hạ tầng + build và chạy api, transcoder, nginx (kèm web)
+make up          # dựng hạ tầng + build và chạy api, transcoder, analytics, nginx (kèm web)
 make seed-admin  # tạo admin từ ADMIN_EMAIL / ADMIN_PASSWORD trong .env
 make e2e-m4      # upload video tiêu đề tiếng Việt → tìm "tro choi dien tu" → /play qua nginx
 make e2e-m5      # poster/sprite, phụ đề SRT → VTT, sự kiện xem → "Xem tiếp" (KAFKA_DOWN=1: thử Kafka chết)
+make e2e-m6      # sự kiện xem + log vào ClickHouse, SQL mẫu (CH_DOWN=1: thử ClickHouse chết)
+make analytics-sql  # top phim, tỉ lệ xem hết, buffering theo bitrate, log theo service
 ```
 
 Mở http://localhost:8088, đăng nhập bằng `ADMIN_EMAIL` / `ADMIN_PASSWORD` trong `.env` (mặc định `admin@streamfilm.local` / `admin-dev-password`) hoặc bấm "Đăng ký" để tạo tài khoản người xem. Catalog trống cho tới khi có video `ready`: chạy `make e2e-m4` (hoặc `make e2e-m2`) để upload `tmp/sample.mp4`.

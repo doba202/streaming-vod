@@ -1,6 +1,6 @@
 # Các luồng
 
-Chỉ gồm các luồng đã chạy (tới M3). Xem tiếp và analytics được thêm ở M5–M6.
+Chỉ gồm các luồng đã chạy (tới M6).
 
 ## Upload và transcode
 
@@ -143,4 +143,29 @@ sequenceDiagram
   API-->>H: {videos: [..., position_s, watched_at]}
   H->>API: bấm thẻ → /watch/{id} → GET /play
   API->>PG: resume_at = position_s (0 nếu ≥ 95%)
+```
+
+## Analytics và log (M6)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant API as api / transcoder
+  participant K as Kafka
+  participant AN as analytics
+  participant CH as ClickHouse
+  API-)K: playback.events (BestEffort, M5)
+  API-)K: app.logs — mỗi dòng slog (TryProduce, đầy thì bỏ)
+  loop mỗi pipeline (analytics-playback, analytics-logs)
+    AN->>K: PollRecords (tối đa 1000 - số record đang gom)
+    Note over AN: record hỏng → bỏ qua, log "skip invalid record"
+    alt đủ 1000 record hoặc 1 giây từ record đầu của lô
+      AN->>CH: INSERT … FORMAT JSONEachRow (insert_deduplication_token = khoảng offset)
+      alt ClickHouse lỗi
+        AN->>AN: chờ 1s, 2s, 4s … 30s rồi gửi lại cùng lô, cùng token
+      end
+      AN->>K: CommitRecords (cả lô, kể cả record hỏng)
+    end
+  end
+  Note over AN,K: SIGTERM: ghi nốt lô đang dở (tối đa 10 giây) rồi commit; không kịp thì không commit, lần sau đọc lại (SIGTERM giữa lúc INSERT thử lại: thử thêm đúng một lần với cùng lô và token)
 ```
