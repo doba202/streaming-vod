@@ -22,7 +22,7 @@ const nginxImage = "nginx:1.27-alpine"
 // cổng 8000) trả lại URI nhận được để kiểm tra proxy /api/ giữ nguyên đường dẫn và query.
 const originConf = `server { listen 9000; root /srv;
   types { application/vnd.apple.mpegurl m3u8; video/mp2t ts; image/jpeg jpg; text/vtt vtt; } }
-server { listen 8000; location / { return 200 "api:$request_uri"; } }`
+server { listen 8000; client_max_body_size 10m; location / { return 200 "api:$request_uri"; } }`
 
 // TestNginxSecureLinkParity chạy đúng template nginx của repo và kiểm tra nginx chấp nhận
 // URL do SignedPath sinh ra, từ chối URL sửa chữ ký / hết hạn / khác video.
@@ -143,6 +143,18 @@ func TestNginxSecureLinkParity(t *testing.T) {
 			if got := resp.Header.Get(h); got != want {
 				t.Errorf("%s: %s = %q, want %q", c.name, h, got, want)
 			}
+		}
+	}
+
+	// /api/ nhận body tới 2 MiB (phụ đề 1 MiB + overhead multipart), quá thì 413 (mặc định nginx là 1 MiB).
+	for size, want := range map[int]int{1536 * 1024: 200, 3 * 1024 * 1024: 413} {
+		resp, err := http.Post(endpoint+"/api/x", "application/octet-stream", strings.NewReader(strings.Repeat("a", size)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("POST /api/x body %d byte = %d, want %d", size, resp.StatusCode, want)
 		}
 	}
 
