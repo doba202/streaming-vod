@@ -26,10 +26,15 @@ export function AdminUploadPage() {
   const [description, setDescription] = useState('');
   const [genres, setGenres] = useState('');
   const [year, setYear] = useState('');
-  const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
+  const [progress, setProgress] = useState<{
+    loaded: number;
+    total: number;
+  } | null>(null);
   const [error, setError] = useState('');
   const [failedId, setFailedId] = useState('');
   const abort = useRef<AbortController | null>(null);
+  const cancelled = useRef(false);
+  const createdId = useRef('');
 
   useEffect(() => () => abort.current?.abort(), []); // rời trang thì huỷ upload đang chạy
 
@@ -49,16 +54,39 @@ export function AdminUploadPage() {
     if (!Number.isInteger(y) || (y !== 0 && (y < 1888 || y > 2100))) return setError('Năm phải từ 1888 đến 2100.');
 
     abort.current = new AbortController();
+    cancelled.current = false;
+    createdId.current = '';
     setProgress({ loaded: 0, total: file.size });
     try {
       const id = await uploadVideo(
         file,
-        { title: title.trim(), description: description.trim(), genres: parseGenres(genres), year: y || undefined },
-        { signal: abort.current.signal, onProgress: (loaded, total) => setProgress({ loaded, total }) },
+        {
+          title: title.trim(),
+          description: description.trim(),
+          genres: parseGenres(genres),
+          year: y || undefined,
+        },
+        {
+          signal: abort.current.signal,
+          onCreated: (id) => (createdId.current = id),
+          onProgress: (loaded, total) => setProgress({ loaded, total }),
+        },
       );
       navigate(`/admin/videos/${id}`);
     } catch (err) {
       setProgress(null);
+      if (cancelled.current) {
+        const id = err instanceof UploadVideoError ? err.videoId : createdId.current;
+        if (!id) return setError('Đã huỷ upload.');
+        try {
+          await adminApi.remove(id);
+          setError('Đã huỷ upload và xoá video dở.');
+        } catch (e) {
+          setFailedId(id);
+          setError(`Đã huỷ upload nhưng không xoá được video dở: ${errorMessage(e)}`);
+        }
+        return;
+      }
       if (err instanceof UploadVideoError) {
         setFailedId(err.videoId);
         setError(`Upload lỗi: ${err.message}`);
@@ -66,6 +94,12 @@ export function AdminUploadPage() {
         setError(`Không tạo được video: ${errorMessage(err)}`);
       }
     }
+  };
+
+  // cancel: dừng upload; submit() thấy cancelled thì xoá video `uploading` mồ côi (best effort, báo kết quả).
+  const cancel = () => {
+    cancelled.current = true;
+    abort.current?.abort();
   };
 
   const discard = async () => {
@@ -103,7 +137,12 @@ export function AdminUploadPage() {
         </label>
         <label>
           Mô tả
-          <textarea value={description} rows={3} disabled={uploading} onChange={(e) => setDescription(e.target.value)} />
+          <textarea
+            value={description}
+            rows={3}
+            disabled={uploading}
+            onChange={(e) => setDescription(e.target.value)}
+          />
         </label>
         <label>
           Thể loại (cách nhau bằng dấu phẩy)
@@ -134,6 +173,11 @@ export function AdminUploadPage() {
         <button type="submit" disabled={uploading}>
           {uploading ? 'Đang upload…' : 'Upload'}
         </button>
+        {uploading && (
+          <button type="button" className="danger" onClick={cancel}>
+            Huỷ upload
+          </button>
+        )}
       </form>
     </section>
   );

@@ -7,15 +7,66 @@ import { adminApi, type CreateVideoInput, type UploadPlan } from '../api';
 export const UPLOAD_CONCURRENCY = 3;
 // PART_ATTEMPTS: mỗi part thử tối đa 3 lần (lỗi mạng ngắn) trước khi bỏ cả upload.
 export const PART_ATTEMPTS = 3;
+// RETRY_BASE_MS: chờ RETRY_BASE_MS·2^(lần-1) giữa hai lần thử một part (500ms, 1s, ...).
+export const RETRY_BASE_MS = 500;
 
 // PutPart gửi một part; gọi onProgress(số byte đã gửi của part này) trong lúc gửi.
-export type PutPart = (url: string, body: Blob, onProgress: (loaded: number) => void, signal: AbortSignal) => Promise<void>;
+export type PutPart = (
+  url: string,
+  body: Blob,
+  onProgress: (loaded: number) => void,
+  signal: AbortSignal,
+) => Promise<void>;
 
 export interface UploadOptions {
   onProgress?: (loaded: number, total: number) => void;
   concurrency?: number;
   putPart?: PutPart;
   signal?: AbortSignal;
+  retryBaseMs?: number;
+  // onCreated: gọi ngay sau khi tạo video (để trang admin biết id mà xoá khi huỷ upload).
+  onCreated?: (videoId: string) => void;
+}
+
+// HttpError: PUT part nhận mã không phải 2xx.
+export class HttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`HTTP ${status}`);
+    this.name = 'HttpError';
+    this.status = status;
+  }
+}
+
+// retryable: lỗi mạng và 5xx, 408, 429 thì thử lại; các 4xx khác (vd. 403 link hết hạn) thì không.
+function retryable(err: unknown): boolean {
+  if (!(err instanceof HttpError)) return true;
+  return err.status >= 500 || err.status === 408 || err.status === 429;
+}
+
+function describeError(err: unknown): string {
+  if (err instanceof HttpError) {
+    if (err.status === 403) return 'Link upload đã hết hạn hoặc không hợp lệ, hãy tạo lại';
+    if (err.status === 413) return 'Phần upload quá lớn';
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
+// sleep chờ ms mili giây; ném AbortError ngay khi signal bị huỷ.
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(new DOMException('upload aborted', 'AbortError'));
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(new DOMException('upload aborted', 'AbortError'));
+    };
+    const t = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 export class UploadError extends Error {
@@ -35,8 +86,7 @@ export const xhrPutPart: PutPart = (url, body, onProgress, signal) =>
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url);
     xhr.upload.onprogress = (e) => onProgress(e.loaded);
-    xhr.onload = () =>
-      xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`HTTP ${xhr.status}`));
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new HttpError(xhr.status)));
     xhr.onerror = () => reject(new Error('lỗi mạng (kiểm tra CORS của MinIO và cổng 9000)'));
     xhr.onabort = () => reject(new DOMException('upload aborted', 'AbortError'));
     if (signal.aborted) {
@@ -69,19 +119,24 @@ export async function uploadParts(file: Blob, plan: UploadPlan, opts: UploadOpti
     for (let attempt = 1; ; attempt++) {
       loaded.set(partNumber, 0);
       try {
-        await put(url, body, (n) => {
-          loaded.set(partNumber, Math.min(n, body.size));
-          report();
-        }, ctrl.signal);
+        await put(
+          url,
+          body,
+          (n) => {
+            loaded.set(partNumber, Math.min(n, body.size));
+            report();
+          },
+          ctrl.signal,
+        );
         loaded.set(partNumber, body.size);
         report();
         return;
       } catch (err) {
         if (ctrl.signal.aborted) throw err;
-        if (attempt >= PART_ATTEMPTS) {
-          const msg = err instanceof Error ? err.message : String(err);
-          throw new UploadError(partNumber, `part ${partNumber}: ${msg}`);
+        if (attempt >= PART_ATTEMPTS || !retryable(err)) {
+          throw new UploadError(partNumber, `part ${partNumber}: ${describeError(err)}`);
         }
+        await sleep((opts.retryBaseMs ?? RETRY_BASE_MS) * 2 ** (attempt - 1), ctrl.signal);
       }
     }
   };
@@ -115,7 +170,12 @@ export class UploadVideoError extends Error {
 }
 
 export async function uploadVideo(file: File, meta: VideoMeta, opts: UploadOptions = {}): Promise<string> {
-  const created = await adminApi.create({ ...meta, filename: file.name, size_bytes: file.size });
+  const created = await adminApi.create({
+    ...meta,
+    filename: file.name,
+    size_bytes: file.size,
+  });
+  opts.onCreated?.(created.id);
   try {
     await uploadParts(file, created.upload, opts);
     await adminApi.complete(created.id);
