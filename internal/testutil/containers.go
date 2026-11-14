@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/testcontainers/testcontainers-go"
+	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/modules/redpanda"
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -67,4 +68,31 @@ func StartKafka(t *testing.T, topics ...string) []string {
 		t.Fatal(err)
 	}
 	return []string{broker}
+}
+
+// MinIOImage: minio/minio trên Docker Hub không pull được, dùng Chainguard ghim digest (ADR 0003).
+const MinIOImage = "cgr.dev/chainguard/minio:latest-dev@sha256:5735e8125c4af7dd310dc5780508bfb850f0b68783a1a56089b5c64316a8f603"
+
+type MinIO struct {
+	Endpoint, User, Password string
+}
+
+// StartMinIO chạy MinIO trong container. Skip khi -short hoặc không có Docker.
+func StartMinIO(t *testing.T) MinIO {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+	ctx := context.Background()
+	ctr, err := tcminio.Run(ctx, MinIOImage)
+	testcontainers.CleanupContainer(t, ctr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr, err := ctr.ConnectionString(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return MinIO{Endpoint: "http://" + addr, User: ctr.Username, Password: ctr.Password}
 }

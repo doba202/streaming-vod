@@ -19,22 +19,34 @@ import (
 
 type Config struct {
 	Endpoint, Region, AccessKey, SecretKey string
+	// PublicEndpoint là địa chỉ client bên ngoài dùng với presigned URL (chữ ký gắn với Host).
+	// Rỗng thì dùng Endpoint.
+	PublicEndpoint string
 }
 
 type Store struct {
-	client *s3.Client
+	client  *s3.Client
+	presign *s3.PresignClient
 }
 
-func New(cfg Config) *Store {
-	client := s3.New(s3.Options{
+func newClient(endpoint string, cfg Config) *s3.Client {
+	return s3.New(s3.Options{
 		Region:                     cfg.Region,
-		BaseEndpoint:               aws.String(cfg.Endpoint),
+		BaseEndpoint:               aws.String(endpoint),
 		UsePathStyle:               true,
 		Credentials:                credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, ""),
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
 	})
-	return &Store{client: client}
+}
+
+func New(cfg Config) *Store {
+	public := cfg.PublicEndpoint
+	if public == "" {
+		public = cfg.Endpoint
+	}
+	// Presign chạy offline (không gọi mạng), nên client presign trỏ vào địa chỉ public là đủ.
+	return &Store{client: newClient(cfg.Endpoint, cfg), presign: s3.NewPresignClient(newClient(public, cfg))}
 }
 
 func (s *Store) EnsureBucket(ctx context.Context, bucket string) error {
