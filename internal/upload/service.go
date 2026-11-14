@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"strings"
 	"time"
@@ -40,7 +41,8 @@ type Videos interface {
 type Objects interface {
 	CreateMultipartUpload(ctx context.Context, bucket, key, contentType string) (string, error)
 	PresignUploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, ttl time.Duration) (string, error)
-	CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, wantParts int) error
+	CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, wantParts int, wantSize, partSize, maxSize int64) error
+	AbortMultipartUpload(ctx context.Context, bucket, key, uploadID string) error
 	Exists(ctx context.Context, bucket, key string) (bool, error)
 }
 
@@ -55,6 +57,7 @@ type Service struct {
 	BucketRaw string
 	Now       func() time.Time
 	NewID     func() string
+	Log       *slog.Logger // tuỳ chọn; nil = slog.Default()
 }
 
 type CreateInput struct {
@@ -88,6 +91,13 @@ func PartCount(size int64) int { return int((size + PartSize - 1) / PartSize) }
 
 // RawKey là key trong bucket raw: {id}/source.{ext}.
 func RawKey(id, ext string) string { return id + "/source" + ext }
+
+func (s *Service) logger() *slog.Logger {
+	if s.Log != nil {
+		return s.Log
+	}
+	return slog.Default()
+}
 
 func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalidInput, fmt.Sprintf(format, args...))
@@ -127,6 +137,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateOutput, err
 	err = s.Videos.Create(ctx, catalog.Video{ID: id, Title: in.Title, Description: in.Description,
 		Genres: in.Genres, Year: in.Year, RawKey: key, UploadID: uploadID, SizeBytes: in.SizeBytes})
 	if err != nil {
+		// Không để multipart upload mồ côi; lỗi huỷ chỉ log (cleaner/lifecycle sẽ dọn sau).
+		if aerr := s.Objects.AbortMultipartUpload(context.WithoutCancel(ctx), s.BucketRaw, key, uploadID); aerr != nil {
+			s.logger().Warn("abort multipart after create failure", "video_id", id, "err", aerr)
+		}
 		return CreateOutput{}, err
 	}
 	return CreateOutput{ID: id, Status: catalog.StatusUploading, Upload: UploadPlan{
@@ -149,7 +163,7 @@ func (s *Service) Complete(ctx context.Context, id string) (catalog.Video, error
 		return v, err
 	}
 	if !exists { // lần gọi trước có thể đã ghép xong nhưng publish lỗi
-		err := s.Objects.CompleteMultipartUpload(ctx, s.BucketRaw, v.RawKey, v.UploadID, PartCount(v.SizeBytes))
+		err := s.Objects.CompleteMultipartUpload(ctx, s.BucketRaw, v.RawKey, v.UploadID, PartCount(v.SizeBytes), v.SizeBytes, PartSize, MaxSizeBytes)
 		if errors.Is(err, storage.ErrIncompleteUpload) {
 			return v, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 		}

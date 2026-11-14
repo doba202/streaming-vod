@@ -45,7 +45,15 @@ func (u *StatusUpdater) Handle(ctx context.Context, rec *kgo.Record) error {
 		for _, r := range ev.Renditions {
 			info.Renditions = append(info.Renditions, Rendition{Height: r.Height, BitrateKbps: r.BitrateKbps, PlaylistKey: r.PlaylistKey})
 		}
-		_, err = u.Store.MarkReady(ctx, id, info)
+		var from Status
+		from, err = u.Store.MarkReady(ctx, id, info)
+		if err != nil && from == StatusQueued && errors.Is(err, ErrInvalidTransition) {
+			// video.processing và video.transcoded ở hai topic khác nhau nên transcoded có thể đến
+			// khi video còn queued: đi qua processing rồi ready (máy trạng thái giữ nguyên).
+			if _, err = u.Store.Transition(ctx, id, StatusProcessing); err == nil || errors.Is(err, ErrInvalidTransition) {
+				_, err = u.Store.MarkReady(ctx, id, info)
+			}
+		}
 	case events.TopicVideoFailed:
 		ev, derr := events.Decode[events.VideoFailed](rec.Value)
 		if derr != nil {

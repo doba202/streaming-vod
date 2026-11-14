@@ -15,8 +15,9 @@ import (
 )
 
 type fakeVideos struct {
-	mu sync.Mutex
-	m  map[string]catalog.Video
+	mu        sync.Mutex
+	createErr error
+	m         map[string]catalog.Video
 }
 
 func newFakeVideos() *fakeVideos { return &fakeVideos{m: map[string]catalog.Video{}} }
@@ -24,6 +25,9 @@ func newFakeVideos() *fakeVideos { return &fakeVideos{m: map[string]catalog.Vide
 func (f *fakeVideos) Create(_ context.Context, v catalog.Video) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.createErr != nil {
+		return f.createErr
+	}
 	v.Status = catalog.StatusUploading
 	f.m[v.ID] = v
 	return nil
@@ -80,7 +84,11 @@ func (f *fakeVideos) status(id string) catalog.Status {
 }
 
 type fakeObjects struct {
-	parts         int // số part client đã upload
+	parts         int   // số part client đã upload
+	size          int64 // tổng byte client đã upload; 0 = khớp size khai báo
+	gotMax        int64
+	aborted       []string
+	abortErr      error
 	exists        bool
 	completeCalls int
 	created       []string
@@ -95,13 +103,22 @@ func (f *fakeObjects) PresignUploadPart(_ context.Context, bucket, key, uploadID
 	return fmt.Sprintf("http://s3.test/%s/%s?uploadId=%s&partNumber=%d&ttl=%s", bucket, key, uploadID, n, ttl), nil
 }
 
-func (f *fakeObjects) CompleteMultipartUpload(_ context.Context, bucket, key, uploadID string, want int) error {
+func (f *fakeObjects) CompleteMultipartUpload(_ context.Context, bucket, key, uploadID string, want int, wantSize, partSize, maxSize int64) error {
 	f.completeCalls++
+	f.gotMax = maxSize
 	if f.parts != want {
 		return fmt.Errorf("%w: got %d parts, want %d", storage.ErrIncompleteUpload, f.parts, want)
 	}
+	if got := f.size; got != 0 && got != wantSize || partSize != PartSize {
+		return fmt.Errorf("%w: size %d, want %d", storage.ErrIncompleteUpload, got, wantSize)
+	}
 	f.exists = true
 	return nil
+}
+
+func (f *fakeObjects) AbortMultipartUpload(_ context.Context, bucket, key, uploadID string) error {
+	f.aborted = append(f.aborted, bucket+"/"+key+"|"+uploadID)
+	return f.abortErr
 }
 
 func (f *fakeObjects) Exists(context.Context, string, string) (bool, error) { return f.exists, nil }
@@ -292,5 +309,39 @@ func TestRetry(t *testing.T) {
 	}
 	if len(pub.got) != 1 || pub.got[0].topic != events.TopicVideoUploaded {
 		t.Errorf("published = %+v", pub.got)
+	}
+}
+
+func TestCompleteRejectsSizeMismatch(t *testing.T) {
+	svc, vids, objs, pub := newService()
+	id := createOne(t, svc) // khai báo 100 byte
+	objs.parts = 1
+	objs.size = 999 // thực tế upload lệch
+	_, err := svc.Complete(context.Background(), id)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("err = %v, want ErrInvalidInput", err)
+	}
+	if vids.status(id) != catalog.StatusUploading || len(pub.got) != 0 {
+		t.Errorf("status = %s, published = %d", vids.status(id), len(pub.got))
+	}
+	if objs.gotMax != MaxSizeBytes {
+		t.Errorf("maxSize passed = %d, want %d", objs.gotMax, MaxSizeBytes)
+	}
+}
+
+func TestCreateAbortsMultipartWhenRepoFails(t *testing.T) {
+	svc, vids, objs, _ := newService()
+	vids.createErr = errors.New("db down")
+	_, err := svc.Create(context.Background(), CreateInput{Title: "A", Filename: "a.mp4", SizeBytes: 100})
+	if !errors.Is(err, vids.createErr) {
+		t.Fatalf("err = %v, want db error", err)
+	}
+	if len(objs.aborted) != 1 || objs.aborted[0] != "raw/"+firstID+"/source.mp4|up-1" {
+		t.Errorf("aborted = %v", objs.aborted)
+	}
+	objs.aborted = nil
+	objs.abortErr = errors.New("s3 down")
+	if _, err := svc.Create(context.Background(), CreateInput{Title: "A", Filename: "a.mp4", SizeBytes: 100}); !errors.Is(err, vids.createErr) {
+		t.Fatalf("abort failure must not mask original error, got %v", err)
 	}
 }

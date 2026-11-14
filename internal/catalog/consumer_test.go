@@ -22,21 +22,35 @@ type storeCall struct {
 type fakeStatusStore struct {
 	calls []storeCall
 	err   error
+	// status mô phỏng máy trạng thái thật khi != "" (dùng cho test thứ tự sự kiện).
+	status Status
+}
+
+func (f *fakeStatusStore) step(to Status) (Status, error) {
+	if f.status == "" {
+		return "", f.err
+	}
+	from := f.status
+	if !CanTransition(from, to) {
+		return from, fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, from, to)
+	}
+	f.status = to
+	return from, nil
 }
 
 func (f *fakeStatusStore) Transition(_ context.Context, id string, to Status) (Status, error) {
 	f.calls = append(f.calls, storeCall{"Transition", id, to})
-	return "", f.err
+	return f.step(to)
 }
 
 func (f *fakeStatusStore) MarkReady(_ context.Context, id string, info ReadyInfo) (Status, error) {
 	f.calls = append(f.calls, storeCall{"MarkReady", id, info})
-	return "", f.err
+	return f.step(StatusReady)
 }
 
 func (f *fakeStatusStore) MarkFailed(_ context.Context, id, reason string) (Status, error) {
 	f.calls = append(f.calls, storeCall{"MarkFailed", id, reason})
-	return "", f.err
+	return f.step(StatusFailed)
 }
 
 func record(t *testing.T, topic string, ev events.Event) *kgo.Record {
@@ -101,5 +115,36 @@ func TestStatusUpdaterReturnsDBErrors(t *testing.T) {
 	err := u.Handle(context.Background(), record(t, events.TopicVideoProcessing, events.VideoProcessing{VideoID: idA}))
 	if !errors.Is(err, dbErr) {
 		t.Errorf("err = %v, want DB error so consumer retries", err)
+	}
+}
+
+func TestStatusUpdaterTranscodedBeforeProcessing(t *testing.T) {
+	u, store := newUpdater(nil)
+	store.status = StatusQueued
+	ctx := context.Background()
+	transcoded := record(t, events.TopicVideoTranscoded, events.VideoTranscoded{VideoID: idA, DurationS: 30, HLSPrefix: idA + "/"})
+	if err := u.Handle(ctx, transcoded); err != nil {
+		t.Fatal(err)
+	}
+	if store.status != StatusReady {
+		t.Fatalf("status = %s, want ready", store.status)
+	}
+	// video.processing đến muộn trên video đã ready phải bị bỏ qua.
+	if err := u.Handle(ctx, record(t, events.TopicVideoProcessing, events.VideoProcessing{VideoID: idA})); err != nil {
+		t.Fatal(err)
+	}
+	if store.status != StatusReady {
+		t.Errorf("status = %s after late processing, want ready", store.status)
+	}
+}
+
+func TestStatusUpdaterFailedFromQueued(t *testing.T) {
+	u, store := newUpdater(nil)
+	store.status = StatusQueued
+	if err := u.Handle(context.Background(), record(t, events.TopicVideoFailed, events.VideoFailed{VideoID: idA, Reason: "x"})); err != nil {
+		t.Fatal(err)
+	}
+	if store.status != StatusFailed {
+		t.Errorf("status = %s, want failed", store.status)
 	}
 }

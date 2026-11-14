@@ -36,9 +36,11 @@ func (s *Store) PresignUploadPart(ctx context.Context, bucket, key, uploadID str
 }
 
 // CompleteMultipartUpload tự liệt kê các part đã upload (lấy ETag từ server) rồi ghép object.
-// Trả ErrIncompleteUpload nếu không đủ đúng các part 1..wantParts.
-func (s *Store) CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, wantParts int) error {
+// Trả ErrIncompleteUpload nếu không đủ đúng các part 1..wantParts, hoặc kích thước thực tế sai:
+// tổng các part phải == wantSize (và <= maxSize), mọi part trừ part cuối phải đúng partSize.
+func (s *Store) CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, wantParts int, wantSize, partSize, maxSize int64) error {
 	var parts []types.CompletedPart
+	var sizes []int64
 	var marker *string
 	for {
 		out, err := s.client.ListParts(ctx, &s3.ListPartsInput{
@@ -50,6 +52,7 @@ func (s *Store) CompleteMultipartUpload(ctx context.Context, bucket, key, upload
 		}
 		for _, p := range out.Parts {
 			parts = append(parts, types.CompletedPart{ETag: p.ETag, PartNumber: p.PartNumber})
+			sizes = append(sizes, aws.ToInt64(p.Size))
 		}
 		if !aws.ToBool(out.IsTruncated) {
 			break
@@ -63,6 +66,19 @@ func (s *Store) CompleteMultipartUpload(ctx context.Context, bucket, key, upload
 		if aws.ToInt32(p.PartNumber) != int32(i+1) {
 			return fmt.Errorf("%w: missing part %d", ErrIncompleteUpload, i+1)
 		}
+	}
+	var total int64
+	for i, sz := range sizes {
+		if i < len(sizes)-1 && sz != partSize {
+			return fmt.Errorf("%w: part %d has %d bytes, want %d", ErrIncompleteUpload, i+1, sz, partSize)
+		}
+		total += sz
+	}
+	if total != wantSize {
+		return fmt.Errorf("%w: uploaded %d bytes, declared %d", ErrIncompleteUpload, total, wantSize)
+	}
+	if total > maxSize {
+		return fmt.Errorf("%w: uploaded %d bytes, max %d", ErrIncompleteUpload, total, maxSize)
 	}
 	_, err := s.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket: aws.String(bucket), Key: aws.String(key), UploadId: aws.String(uploadID),

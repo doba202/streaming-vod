@@ -72,10 +72,26 @@ func TestMultipartUpload(t *testing.T) {
 	if ok, err := s.Exists(ctx, "raw", key); err != nil || ok {
 		t.Fatalf("before complete: exists=%v err=%v", ok, err)
 	}
-	if err := s.CompleteMultipartUpload(ctx, "raw", key, uploadID, 3); !errors.Is(err, ErrIncompleteUpload) {
-		t.Fatalf("want ErrIncompleteUpload, got %v", err)
+	total := int64(len(part1) + len(part2))
+	const maxSize = 10 << 30
+	partSize := int64(len(part1))
+	for name, c := range map[string]struct {
+		parts            int
+		size, part, maxS int64
+	}{
+		"wrong part count": {3, total, partSize, maxSize},
+		"size mismatch":    {2, total + 1, partSize, maxSize},
+		"part size":        {2, total, partSize + 1, maxSize},
+		"over max":         {2, total, partSize, total - 1},
+	} {
+		if err := s.CompleteMultipartUpload(ctx, "raw", key, uploadID, c.parts, c.size, c.part, c.maxS); !errors.Is(err, ErrIncompleteUpload) {
+			t.Fatalf("%s: want ErrIncompleteUpload, got %v", name, err)
+		}
 	}
-	if err := s.CompleteMultipartUpload(ctx, "raw", key, uploadID, 2); err != nil {
+	if ok, _ := s.Exists(ctx, "raw", key); ok {
+		t.Fatal("object must not exist after rejected completes")
+	}
+	if err := s.CompleteMultipartUpload(ctx, "raw", key, uploadID, 2, total, partSize, maxSize); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := s.Exists(ctx, "raw", key); err != nil || !ok {
