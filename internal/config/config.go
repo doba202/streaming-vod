@@ -3,6 +3,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,6 +18,8 @@ type Config struct {
 	HTTPAddr                                                         string
 	WorkDir                                                          string
 	StaleUploadAfter, CleanupInterval                                time.Duration
+	JWTSecret, CDNSigningSecret                                      string
+	CookieSecure                                                     bool
 }
 
 func Load() Config {
@@ -39,6 +42,11 @@ func Load() Config {
 		WorkDir:          get("WORK_DIR", os.TempDir()),
 		StaleUploadAfter: getDuration("STALE_UPLOAD_AFTER", 24*time.Hour),
 		CleanupInterval:  getDuration("CLEANUP_INTERVAL", time.Hour),
+		// Không có mặc định: api từ chối khởi động nếu thiếu (auth.NewTokens, signing.NewSigner kiểm tra).
+		JWTSecret:        os.Getenv("JWT_SECRET"),
+		CDNSigningSecret: os.Getenv("CDN_SIGNING_SECRET"),
+		// false khi chạy http://localhost; bật khi có HTTPS.
+		CookieSecure: getBool("COOKIE_SECURE", false),
 	}
 }
 
@@ -56,6 +64,15 @@ func getDuration(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// getBool đọc "true"/"false"/"1"/"0"; rỗng hoặc sai định dạng thì dùng mặc định.
+func getBool(key string, def bool) bool {
+	b, err := strconv.ParseBool(os.Getenv(key))
+	if err != nil {
+		return def
+	}
+	return b
 }
 
 func splitList(s string) []string {

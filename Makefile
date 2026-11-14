@@ -2,8 +2,12 @@ COMPOSE := docker compose -f deploy/docker-compose.yml --env-file .env
 
 .PHONY: env up down logs logs-app ps test test-short build sample transcode run-api run-worker e2e-m2
 
+# Tạo .env từ .env.example; nếu .env đã có thì bổ sung các khoá mới (vd. khoá M3) mà không ghi đè giá trị cũ.
 env:
 	@test -f .env || cp .env.example .env
+	@for k in $$(grep -oE '^[A-Z0-9_]+=' .env.example | tr -d =); do \
+	  grep -q "^$$k=" .env || { grep "^$$k=" .env.example >> .env; echo "added $$k to .env"; }; \
+	done
 
 # Các service one-shot (minio-init, kafka-init) thoát với mã 0 nên không dùng --wait cho chúng.
 up: env

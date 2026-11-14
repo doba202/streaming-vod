@@ -80,3 +80,24 @@ func TestLoadM2Override(t *testing.T) {
 		t.Errorf("CleanupInterval sai định dạng phải về mặc định, got %v", c.CleanupInterval)
 	}
 }
+
+func TestLoadM3(t *testing.T) {
+	t.Setenv("JWT_SECRET", "")
+	t.Setenv("CDN_SIGNING_SECRET", "")
+	t.Setenv("COOKIE_SECURE", "")
+	c := Load()
+	if c.JWTSecret != "" || c.CDNSigningSecret != "" || c.CookieSecure {
+		t.Errorf("defaults = %q %q %v", c.JWTSecret, c.CDNSigningSecret, c.CookieSecure)
+	}
+	t.Setenv("JWT_SECRET", "jwt-secret")
+	t.Setenv("CDN_SIGNING_SECRET", "cdn-secret")
+	t.Setenv("COOKIE_SECURE", "true")
+	c = Load()
+	if c.JWTSecret != "jwt-secret" || c.CDNSigningSecret != "cdn-secret" || !c.CookieSecure {
+		t.Errorf("override = %q %q %v", c.JWTSecret, c.CDNSigningSecret, c.CookieSecure)
+	}
+	t.Setenv("COOKIE_SECURE", "not-bool")
+	if Load().CookieSecure {
+		t.Error("COOKIE_SECURE sai định dạng phải về false")
+	}
+}
