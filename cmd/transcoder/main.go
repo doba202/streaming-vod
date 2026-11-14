@@ -1,4 +1,7 @@
-// Command transcoder biến video thành HLS. M1: chế độ "file" chạy một lần từ CLI.
+// Command transcoder biến video thành HLS.
+//
+//	transcoder file -in <video> -id <video_id>   chạy một lần từ CLI (M1)
+//	transcoder worker                             consume video.uploaded từ Kafka (M2)
 package main
 
 import (
@@ -9,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"streamfilm/internal/config"
 	"streamfilm/internal/storage"
@@ -18,26 +22,51 @@ import (
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", "transcoder")
 	slog.SetDefault(logger)
-
-	if len(os.Args) < 2 || os.Args[1] != "file" {
-		fmt.Fprintln(os.Stderr, "usage: transcoder file -in <video> -id <video_id>")
-		os.Exit(2)
+	if len(os.Args) < 2 {
+		usage()
 	}
+
+	// SIGTERM (docker stop) huỷ ctx: FFmpeg bị kill, offset của job dở không được commit.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	cfg := config.Load()
+	var err error
+	switch os.Args[1] {
+	case "file":
+		err = fileCmd(ctx, cfg, os.Args[2:])
+	case "worker":
+		err = runWorker(ctx, cfg)
+	default:
+		usage()
+	}
+	stop()
+	if err != nil {
+		slog.Error("transcoder failed", "err", err)
+		os.Exit(1)
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, "usage:\n  transcoder file -in <video> -id <video_id>\n  transcoder worker")
+	os.Exit(2)
+}
+
+func newStore(cfg config.Config) *storage.Store {
+	return storage.New(storage.Config{
+		Endpoint: cfg.S3Endpoint, Region: cfg.S3Region,
+		AccessKey: cfg.S3AccessKey, SecretKey: cfg.S3SecretKey,
+	})
+}
+
+func fileCmd(ctx context.Context, cfg config.Config, args []string) error {
 	fs := flag.NewFlagSet("file", flag.ExitOnError)
 	in := fs.String("in", "", "đường dẫn file video đầu vào")
 	id := fs.String("id", "", "video id, dùng làm prefix trong bucket hls")
-	fs.Parse(os.Args[2:])
+	fs.Parse(args)
 	if *in == "" || *id == "" {
 		fs.Usage()
 		os.Exit(2)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	if err := runFile(ctx, config.Load(), *in, *id); err != nil {
-		slog.Error("transcode failed", "video_id", *id, "err", err)
-		os.Exit(1)
-	}
+	return runFile(ctx, cfg, *in, *id)
 }
 
 func runFile(ctx context.Context, cfg config.Config, input, id string) error {
@@ -59,11 +88,7 @@ func runFile(ctx context.Context, cfg config.Config, input, id string) error {
 	}
 	slog.Info("transcode done", "video_id", id, "duration_s", res.Probe.DurationSec, "rungs", rungs)
 
-	store := storage.New(storage.Config{
-		Endpoint: cfg.S3Endpoint, Region: cfg.S3Region,
-		AccessKey: cfg.S3AccessKey, SecretKey: cfg.S3SecretKey,
-	})
-	n, err := store.UploadDir(ctx, cfg.BucketHLS, id, out)
+	n, err := newStore(cfg).UploadDir(ctx, cfg.BucketHLS, id, out)
 	if err != nil {
 		return err
 	}

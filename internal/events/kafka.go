@@ -51,7 +51,13 @@ type Consumer struct {
 }
 
 func NewConsumer(brokers []string, group string, log *slog.Logger, topics ...string) (*Consumer, error) {
-	cl, err := kgo.NewClient(
+	return NewConsumerWithOpts(brokers, group, log, topics)
+}
+
+// NewConsumerWithOpts như NewConsumer nhưng nhận thêm option kgo, áp dụng sau các mặc định (nên ghi đè được).
+// Worker transcode dùng để nới RebalanceTimeout/SessionTimeout vì handler chạy rất lâu.
+func NewConsumerWithOpts(brokers []string, group string, log *slog.Logger, topics []string, extra ...kgo.Opt) (*Consumer, error) {
+	opts := []kgo.Opt{
 		kgo.SeedBrokers(brokers...),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topics...),
@@ -59,7 +65,8 @@ func NewConsumer(brokers []string, group string, log *slog.Logger, topics ...str
 		kgo.DisableAutoCommit(),
 		// Không cho rebalance chen vào giữa lúc đang xử lý record đã poll.
 		kgo.BlockRebalanceOnPoll(),
-	)
+	}
+	cl, err := kgo.NewClient(append(opts, extra...)...)
 	if err != nil {
 		return nil, fmt.Errorf("kafka consumer %s: %w", group, err)
 	}
