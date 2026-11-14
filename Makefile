@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f deploy/docker-compose.yml --env-file .env
 
-.PHONY: env up down logs ps test test-short build sample transcode
+.PHONY: env up down logs ps test test-short build sample transcode run-api run-worker
 
 env:
 	@test -f .env || cp .env.example .env
@@ -26,6 +26,7 @@ test-short:
 	go test -short ./...
 
 build:
+	go build -o bin/api ./cmd/api
 	go build -o bin/transcoder ./cmd/transcoder
 
 # Sinh video mẫu 30 giây 1080p có tiếng vào tmp/sample.mp4
@@ -38,3 +39,11 @@ sample:
 # make transcode FILE=tmp/sample.mp4 ID=demo
 transcode: build env
 	set -a; . ./.env; set +a; ./bin/transcoder file -in $(FILE) -id $(ID)
+
+# Chạy api trên host (cần `make up`; dừng service api trong compose trước nếu đã có, vì cùng cổng 8000).
+run-api: env
+	set -a; . ./.env; set +a; go run ./cmd/api
+
+# Chạy transcoder worker trên host (cần FFmpeg trên máy; dừng service transcoder trong compose trước nếu đã có).
+run-worker: env
+	set -a; . ./.env; set +a; go run ./cmd/transcoder worker
