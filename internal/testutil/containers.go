@@ -3,11 +3,13 @@ package testutil
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/testcontainers/testcontainers-go"
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/modules/redpanda"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -95,4 +97,43 @@ func StartMinIO(t *testing.T) MinIO {
 		t.Fatal(err)
 	}
 	return MinIO{Endpoint: "http://" + addr, User: ctr.Username, Password: ctr.Password}
+}
+
+// ClickHouseImage: cùng image với service clickhouse trong deploy/docker-compose.yml.
+const ClickHouseImage = "clickhouse/clickhouse-server:24.8"
+
+// ClickHouse: thông tin kết nối HTTP interface của container test.
+type ClickHouse struct {
+	URL, DB, User, Password string
+}
+
+// StartClickHouse chạy ClickHouse (database streamfilm, user streamfilm/streamfilm) và trả URL HTTP.
+// Skip khi -short hoặc không có Docker.
+func StartClickHouse(t *testing.T) ClickHouse {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+	ctx := context.Background()
+	ctr, err := testcontainers.Run(ctx, ClickHouseImage,
+		testcontainers.WithExposedPorts("8123/tcp"),
+		testcontainers.WithEnv(map[string]string{
+			"CLICKHOUSE_DB":                        "streamfilm",
+			"CLICKHOUSE_USER":                      "streamfilm",
+			"CLICKHOUSE_PASSWORD":                  "streamfilm",
+			"CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT": "1",
+		}),
+		testcontainers.WithWaitStrategy(wait.ForHTTP("/ping").WithPort("8123/tcp").
+			WithStartupTimeout(2*time.Minute)),
+	)
+	testcontainers.CleanupContainer(t, ctr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := ctr.PortEndpoint(ctx, "8123/tcp", "http")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ClickHouse{URL: endpoint, DB: "streamfilm", User: "streamfilm", Password: "streamfilm"}
 }

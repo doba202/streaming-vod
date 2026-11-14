@@ -20,6 +20,8 @@ type Config struct {
 	StaleUploadAfter, CleanupInterval                                time.Duration
 	JWTSecret, CDNSigningSecret                                      string
 	CookieSecure                                                     bool
+	// M6: analytics ghi vào ClickHouse qua HTTP interface (cổng 8123).
+	ClickHouseURL, ClickHouseDB, ClickHouseUser, ClickHousePassword string
 }
 
 func Load() Config {
@@ -47,6 +49,11 @@ func Load() Config {
 		CDNSigningSecret: os.Getenv("CDN_SIGNING_SECRET"),
 		// false khi chạy http://localhost; bật khi có HTTPS.
 		CookieSecure: getBool("COOKIE_SECURE", false),
+		// Mặc định khớp service clickhouse trong compose (mật khẩu = POSTGRES_PASSWORD của .env.example).
+		ClickHouseURL:      get("CLICKHOUSE_URL", "http://localhost:8123"),
+		ClickHouseDB:       get("CLICKHOUSE_DB", "streamfilm"),
+		ClickHouseUser:     get("CLICKHOUSE_USER", "streamfilm"),
+		ClickHousePassword: get("CLICKHOUSE_PASSWORD", "streamfilm"),
 	}
 }
 

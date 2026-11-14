@@ -101,3 +101,20 @@ func TestLoadM3(t *testing.T) {
 		t.Error("COOKIE_SECURE sai định dạng phải về false")
 	}
 }
+
+func TestLoadM6ClickHouse(t *testing.T) {
+	for _, k := range []string{"CLICKHOUSE_URL", "CLICKHOUSE_DB", "CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD"} {
+		t.Setenv(k, "")
+	}
+	c := Load()
+	if c.ClickHouseURL != "http://localhost:8123" || c.ClickHouseDB != "streamfilm" ||
+		c.ClickHouseUser != "streamfilm" || c.ClickHousePassword != "streamfilm" {
+		t.Errorf("defaults = %q %q %q %q", c.ClickHouseURL, c.ClickHouseDB, c.ClickHouseUser, c.ClickHousePassword)
+	}
+	t.Setenv("CLICKHOUSE_URL", "http://clickhouse:8123")
+	t.Setenv("CLICKHOUSE_PASSWORD", "secret")
+	c = Load()
+	if c.ClickHouseURL != "http://clickhouse:8123" || c.ClickHousePassword != "secret" {
+		t.Errorf("override = %q %q", c.ClickHouseURL, c.ClickHousePassword)
+	}
+}
