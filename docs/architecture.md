@@ -14,22 +14,25 @@ flowchart LR
   T -->|raw/ → hls/| S3
   T -->|video.processing / transcoded / failed| K
   K --> API
-  Viewer[Web + hls.js] -->|segments| N[nginx CDN]
-  N --> S3
+  Viewer[Web + hls.js] -->|login, /api/videos/:id/play| API
+  Viewer -->|/cdn/s/sig/exp/hls/id/… segments| N[nginx CDN]
+  N -->|secure_link_md5 hợp lệ| S3
 ```
 
-Phần đã chạy ở M2: `api` (upload, danh sách video cho admin, consumer trạng thái, job dọn upload bỏ dở), `transcoder worker`, Postgres, Kafka, MinIO, nginx. Chưa có: đăng nhập và signed URL (M3), web (M4), analytics (M6).
+Phần đã chạy tới M3: `api` (đăng ký/đăng nhập, catalog và `/play` cho người xem, upload và danh sách video cho admin, consumer trạng thái, job dọn upload bỏ dở), `transcoder worker`, Postgres, Kafka, MinIO, nginx kiểm tra signed URL. Chưa có: web (M4), xem tiếp và phụ đề (M5), analytics (M6).
 
 ## api
 
-| Module | Trách nhiệm ở M2 |
+| Module | Trách nhiệm (tới M3) |
 |---|---|
 | `internal/upload` | `POST /api/admin/videos` (tạo video, mở multipart upload, trả presigned URL), `/complete`, `/retry`; job dọn upload bỏ dở quá 24 giờ |
-| `internal/catalog` | Repository `videos` / `renditions`, máy trạng thái, `GET /api/admin/videos[/{id}]`, consumer `video.processing` / `video.transcoded` / `video.failed` (group `api`) |
+| `internal/catalog` | Repository `videos` / `renditions`, máy trạng thái, `GET /api/admin/videos[/{id}]`, `GET /api/videos[/{id}]` và `/play` cho người xem (chỉ video `ready`), consumer `video.processing` / `video.transcoded` / `video.failed` (group `api`) |
+| `internal/auth` | Bảng `users`, bcrypt, JWT HS256 trong cookie `sf_session`, `/api/auth/register|login|logout`, `/api/me`, middleware `Authenticate` / `RequireUser` / `RequireAdmin`, lệnh `api seed-admin` |
+| `internal/signing` | Ký đường dẫn `/cdn/s/{sig}/{exp}/hls/{id}/…` đúng công thức `secure_link_md5` của nginx; từ chối tên file không an toàn (rỗng, bắt đầu bằng `/`, chứa `..`, `?`, `#`, `\` hoặc khoảng trắng) |
 | `internal/events` | Topic, schema JSON, producer/consumer franz-go |
 | `internal/db`, `migrations/` | Kết nối pgx, migration SQL nhúng, chạy khi api khởi động |
 
-Nếu consumer trạng thái của `api` lỗi không phục hồi được thì process thoát với mã khác 0 (compose `restart: unless-stopped` khởi động lại). Chỉ `api` ghi Postgres. Endpoint admin **chưa có auth** ở M2; M3 bọc nhóm `/api/admin` bằng middleware yêu cầu role `admin`.
+Nếu consumer trạng thái của `api` lỗi không phục hồi được thì process thoát với mã khác 0 (compose `restart: unless-stopped` khởi động lại). Chỉ `api` ghi Postgres. Router chia ba nhóm: public (`/healthz`, `/api/auth/*`), user (`/api/me`, `/api/videos/*`; `RequireUser`, thiếu đăng nhập → `401`) và admin (`/api/admin/*`; `RequireAdmin`, thiếu đăng nhập → `401`, viewer → `403`). Middleware `Authenticate` chạy cho mọi request: đọc cookie `sf_session`, kiểm tra JWT và gắn user id + role vào context, không truy vấn DB ([ADR 0010](decisions/0010-jwt-cookie-session.md)).
 
 ## Transcoder
 
@@ -58,6 +61,14 @@ Chế độ `transcoder file -in … -id …` của M1 vẫn dùng được đ�
 - Do đó giao nhận là *at-least-once*: handler phải idempotent. `api` bỏ qua sự kiện làm chuyển trạng thái không hợp lệ (ví dụ `video.transcoded` khi video đã `ready`).
 - Ghi Postgres rồi publish Kafka là dual-write, chấp nhận ở MVP ([ADR 0007](decisions/0007-accept-dual-write.md)).
 
+## CDN và signed URL
+
+`/api/videos/{id}/play` trả `CDN_BASE_URL + /cdn/s/{sig}/{exp}/hls/{id}/master.m3u8` (URL tuyệt đối, vì web M4 chạy khác origin với nginx), với `exp` = now + 2 giờ và `sig` = base64url (không padding) của `MD5("{exp}/hls/{id}/ {CDN_SIGNING_SECRET}")`. Chữ ký phủ cả thư mục `/hls/{id}/`, nên playlist con và segment (đường dẫn tương đối trong playlist) dùng chung một chữ ký.
+
+nginx (`deploy/nginx/templates/default.conf.template`) bắt `sig`, `exp`, `id`, `file` từ path, tính lại chữ ký bằng `secure_link_md5`, sai hoặc hết hạn trả `403`, đúng thì bỏ prefix chữ ký và proxy `/hls/{id}/{file}` tới MinIO kèm `proxy_cache` (cache key `{id}/{file}`, không chứa chữ ký nên mọi người xem dùng chung cache). Secret dùng chung giữa api và nginx qua biến `CDN_SIGNING_SECRET`; image nginx chèn biến vào template bằng envsubst khi khởi động. Test `internal/signing/nginx_test.go` chạy đúng template này trong container để chứng minh hai bên khớp. Vì sao MD5: [ADR 0009](decisions/0009-signed-url-secure-link-md5.md).
+
+Giới hạn đã biết: bucket `hls` vẫn đọc ẩn danh trực tiếp trên MinIO (`localhost:9000`) trong dev, nên lớp ký chỉ có hiệu lực khi đi qua nginx ([ADR 0002](decisions/0002-dev-hls-bucket-read.md)).
+
 ## Bố cục storage
 
 ```
@@ -76,4 +87,5 @@ hls/{id}/{1080p|720p|480p|360p}/seg_000.ts …
 | Message queue | Kafka KRaft 1 node, 7 topic tạo sẵn |
 | Metadata DB | Postgres (`videos`, `renditions`) |
 | S3 | MinIO |
-| CDN | nginx `proxy_cache` (ký URL từ M3) |
+| CDN + token auth | nginx `secure_link_md5` + `proxy_cache`, URL ký theo prefix `/hls/{id}/`, hạn 2 giờ |
+| User/Auth service | module `auth` trong `api` (bcrypt, JWT trong cookie HttpOnly) |

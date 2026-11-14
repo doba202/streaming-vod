@@ -1,10 +1,14 @@
 # Data model
 
-## Postgres (M2)
+## Postgres (tới M3)
 
-Migration nằm trong `migrations/*.sql`, nhúng vào binary `api` và tự chạy khi khởi động (bảng `schema_migrations` ghi version đã áp). Bảng `users` (M3), cột `search` (M4), `subtitles` và `watch_progress` (M5) được thêm bằng migration của giai đoạn đó.
+Migration nằm trong `migrations/*.sql`, nhúng vào binary `api` và tự chạy khi khởi động (bảng `schema_migrations` ghi version đã áp). Cột `search` (M4), `subtitles` và `watch_progress` (M5) được thêm bằng migration của giai đoạn đó.
 
 ```sql
+users (                    -- M3, migrations/0002_users.sql
+  id uuid pk, email text unique check (email = lower(email)), password_hash text,  -- bcrypt cost 12
+  role text check (role in ('admin','viewer')), created_at timestamptz
+)
 videos (
   id uuid pk, title text, description text, genres text[], year int,
   status text check (status in ('uploading','queued','processing','ready','failed')),

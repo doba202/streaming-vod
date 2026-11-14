@@ -1,6 +1,6 @@
 # Các luồng
 
-Chỉ gồm các luồng đã chạy (M2). Luồng xem phim với signed URL, xem tiếp và analytics được thêm ở M3–M6.
+Chỉ gồm các luồng đã chạy (tới M3). Xem tiếp và analytics được thêm ở M5–M6.
 
 ## Upload và transcode
 
@@ -66,3 +66,43 @@ Trước khi ghép, api liệt kê part trên storage và kiểm tra: đủ part
 ## Dọn upload bỏ dở
 
 Job trong `api` chạy lúc khởi động và mỗi `CLEANUP_INTERVAL` (mặc định 1 giờ): tìm video `uploading` tạo quá `STALE_UPLOAD_AFTER` (24 giờ), xoá dòng DB (chỉ khi vẫn còn `uploading`), rồi abort multipart upload và xoá object dưới `raw/{id}/`.
+
+## Đăng nhập và phân quyền
+
+```mermaid
+sequenceDiagram
+  participant B as Trình duyệt / e2e
+  participant API as api
+  participant PG as Postgres
+  B->>API: POST /api/auth/login {email, password}
+  API->>PG: SELECT users WHERE email
+  API->>API: bcrypt.Compare (email không tồn tại: so với hash giả, cùng thời gian)
+  API-->>B: 200 {id, email, role} + Set-Cookie sf_session=JWT (HttpOnly, SameSite=Lax, 24h)
+  B->>API: GET /api/admin/videos (cookie)
+  API->>API: Authenticate: kiểm tra JWT HS256 → {user_id, role}
+  API-->>B: 200 nếu role admin · 403 nếu viewer · 401 nếu thiếu/sai cookie
+```
+
+Tài khoản admin đầu tiên: `make seed-admin` (chạy `api seed-admin` trong container, đọc `ADMIN_EMAIL` / `ADMIN_PASSWORD`; chạy lại thì đặt lại mật khẩu). `POST /api/auth/register` luôn tạo `viewer`.
+
+## Xem phim với signed URL
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant P as Player (hls.js)
+  participant API as api
+  participant N as nginx CDN
+  participant S3 as MinIO
+  P->>API: GET /api/videos/{id}/play (cookie)
+  API->>API: user đã đăng nhập? video ready? exp = now + 2h, sig = md5("{exp}/hls/{id}/ secret")
+  API-->>P: {url: http://localhost:8088/cdn/s/{sig}/{exp}/hls/{id}/master.m3u8, expires_at, subtitles: [], resume_at: 0}
+  P->>N: GET …/master.m3u8
+  N->>N: secure_link_md5 → hợp lệ
+  N->>S3: GET /hls/{id}/master.m3u8 (cache)
+  N-->>P: 200
+  P->>N: GET /cdn/s/{sig}/{exp}/hls/{id}/720p/index.m3u8, …/720p/seg_000.ts (đường dẫn tương đối)
+  N-->>P: 200 (X-Cache-Status: MISS lần đầu, HIT sau đó)
+  Note over P,N: Sửa sig, đổi exp, dùng sig của video khác hoặc quá exp → nginx 403
+  Note over P,API: Player gặp 403 thì gọi lại /play và phát tiếp (web M4, chưa có)
+```
