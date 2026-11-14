@@ -25,6 +25,7 @@ type Video struct {
 	RawKey, UploadID       string
 	SizeBytes              int64
 	HLSPrefix              string
+	PosterKey, SpriteKey   string // key trong bucket hls; rỗng với video transcode trước M5
 	CreatedAt, UpdatedAt   time.Time
 }
 
@@ -38,6 +39,8 @@ type ReadyInfo struct {
 	DurationS  int
 	HLSPrefix  string
 	Renditions []Rendition
+	PosterKey  string // {id}/poster.jpg
+	SpriteKey  string // {id}/thumbnails.vtt (chỉ mục các tấm sprite)
 }
 
 type ListFilter struct {
@@ -53,14 +56,15 @@ func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 
 const videoColumns = `id::text, title, description, genres, COALESCE(year, 0), status,
 	COALESCE(fail_reason, ''), COALESCE(duration_s, 0), raw_key, COALESCE(upload_id, ''),
-	size_bytes, COALESCE(hls_prefix, ''), created_at, updated_at`
+	size_bytes, COALESCE(hls_prefix, ''), COALESCE(poster_key, ''), COALESCE(sprite_key, ''),
+	created_at, updated_at`
 
 func scanVideo(row pgx.Row) (Video, error) {
 	var v Video
 	var status string
 	err := row.Scan(&v.ID, &v.Title, &v.Description, &v.Genres, &v.Year, &status,
 		&v.FailReason, &v.DurationS, &v.RawKey, &v.UploadID, &v.SizeBytes, &v.HLSPrefix,
-		&v.CreatedAt, &v.UpdatedAt)
+		&v.PosterKey, &v.SpriteKey, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Video{}, ErrNotFound
 	}
@@ -167,11 +171,12 @@ func (r *Repo) Transition(ctx context.Context, id string, to Status) (Status, er
 	return r.transition(ctx, id, to, nil)
 }
 
-// MarkReady: processing → ready, ghi thời lượng, prefix HLS và thay toàn bộ rendition.
+// MarkReady: processing → ready, ghi thời lượng, prefix HLS, poster/sprite và thay toàn bộ rendition.
 func (r *Repo) MarkReady(ctx context.Context, id string, info ReadyInfo) (Status, error) {
 	return r.transition(ctx, id, StatusReady, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE videos SET duration_s = $2, hls_prefix = $3, fail_reason = NULL
-			WHERE id = $1`, id, info.DurationS, info.HLSPrefix); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE videos SET duration_s = $2, hls_prefix = $3, fail_reason = NULL,
+			poster_key = NULLIF($4, ''), sprite_key = NULLIF($5, '') WHERE id = $1`,
+			id, info.DurationS, info.HLSPrefix, info.PosterKey, info.SpriteKey); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM renditions WHERE video_id = $1`, id); err != nil {

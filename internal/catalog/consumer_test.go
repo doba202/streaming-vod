@@ -73,7 +73,8 @@ func TestStatusUpdaterDispatch(t *testing.T) {
 	recs := []*kgo.Record{
 		record(t, events.TopicVideoProcessing, events.VideoProcessing{VideoID: idA}),
 		record(t, events.TopicVideoTranscoded, events.VideoTranscoded{VideoID: idA, DurationS: 30, HLSPrefix: idA + "/",
-			Renditions: []events.Rendition{{Height: 720, BitrateKbps: 2800, PlaylistKey: idA + "/720p/index.m3u8"}}}),
+			Renditions: []events.Rendition{{Height: 720, BitrateKbps: 2800, PlaylistKey: idA + "/720p/index.m3u8"}},
+			PosterKey:  idA + "/poster.jpg", SpriteKey: idA + "/thumbnails.vtt"}),
 		record(t, events.TopicVideoFailed, events.VideoFailed{VideoID: idB, Reason: "ffmpeg: boom"}),
 	}
 	for _, rec := range recs {
@@ -84,7 +85,8 @@ func TestStatusUpdaterDispatch(t *testing.T) {
 	want := []storeCall{
 		{"Transition", idA, StatusProcessing},
 		{"MarkReady", idA, ReadyInfo{DurationS: 30, HLSPrefix: idA + "/",
-			Renditions: []Rendition{{Height: 720, BitrateKbps: 2800, PlaylistKey: idA + "/720p/index.m3u8"}}}},
+			Renditions: []Rendition{{Height: 720, BitrateKbps: 2800, PlaylistKey: idA + "/720p/index.m3u8"}},
+			PosterKey:  idA + "/poster.jpg", SpriteKey: idA + "/thumbnails.vtt"}},
 		{"MarkFailed", idB, "ffmpeg: boom"},
 	}
 	if !reflect.DeepEqual(store.calls, want) {

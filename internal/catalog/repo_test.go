@@ -76,12 +76,16 @@ func TestRepo(t *testing.T) {
 		info := ReadyInfo{DurationS: 30, HLSPrefix: idA + "/", Renditions: []Rendition{
 			{Height: 360, BitrateKbps: 800, PlaylistKey: idA + "/360p/index.m3u8"},
 			{Height: 720, BitrateKbps: 2800, PlaylistKey: idA + "/720p/index.m3u8"},
-		}}
+		}, PosterKey: idA + "/poster.jpg", SpriteKey: idA + "/thumbnails.vtt"}
+		if v, _ := r.Get(ctx, idA); v.PosterKey != "" || v.SpriteKey != "" {
+			t.Errorf("chưa ready mà đã có poster/sprite: %+v", v)
+		}
 		if _, err := r.MarkReady(ctx, idA, info); err != nil {
 			t.Fatal(err)
 		}
 		v, _ := r.Get(ctx, idA)
-		if v.Status != StatusReady || v.DurationS != 30 || v.HLSPrefix != idA+"/" {
+		if v.Status != StatusReady || v.DurationS != 30 || v.HLSPrefix != idA+"/" ||
+			v.PosterKey != idA+"/poster.jpg" || v.SpriteKey != idA+"/thumbnails.vtt" {
 			t.Errorf("after ready: %+v", v)
 		}
 		rs, err := r.Renditions(ctx, idA)

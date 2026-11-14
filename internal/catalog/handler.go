@@ -37,6 +37,8 @@ type VideoJSON struct {
 	DurationS   int         `json:"duration_s,omitempty"`
 	SizeBytes   int64       `json:"size_bytes"`
 	HLSPrefix   string      `json:"hls_prefix,omitempty"`
+	PosterKey   string      `json:"poster_key,omitempty"`
+	SpriteKey   string      `json:"sprite_key,omitempty"`
 	CreatedAt   time.Time   `json:"created_at"`
 	UpdatedAt   time.Time   `json:"updated_at"`
 	Renditions  []Rendition `json:"renditions,omitempty"`
@@ -49,7 +51,7 @@ func toJSON(v Video) VideoJSON {
 	}
 	return VideoJSON{ID: v.ID, Title: v.Title, Description: v.Description, Genres: genres, Year: v.Year,
 		Status: v.Status, FailReason: v.FailReason, DurationS: v.DurationS, SizeBytes: v.SizeBytes,
-		HLSPrefix: v.HLSPrefix, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
+		HLSPrefix: v.HLSPrefix, PosterKey: v.PosterKey, SpriteKey: v.SpriteKey, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
 }
 
 func (h *AdminHandler) Routes(r chi.Router) {

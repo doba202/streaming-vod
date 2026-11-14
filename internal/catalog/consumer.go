@@ -41,7 +41,7 @@ func (u *StatusUpdater) Handle(ctx context.Context, rec *kgo.Record) error {
 			return u.skipBad(rec, derr)
 		}
 		id = ev.VideoID
-		info := ReadyInfo{DurationS: ev.DurationS, HLSPrefix: ev.HLSPrefix}
+		info := ReadyInfo{DurationS: ev.DurationS, HLSPrefix: ev.HLSPrefix, PosterKey: ev.PosterKey, SpriteKey: ev.SpriteKey}
 		for _, r := range ev.Renditions {
 			info.Renditions = append(info.Renditions, Rendition{Height: r.Height, BitrateKbps: r.BitrateKbps, PlaylistKey: r.PlaylistKey})
 		}

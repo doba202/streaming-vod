@@ -35,8 +35,8 @@ func TestMigrate(t *testing.T) {
 		}
 		var n int
 		err = pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables
-			WHERE table_schema = 'public' AND table_name IN ('videos', 'renditions')`).Scan(&n)
-		if err != nil || n != 2 {
+			WHERE table_schema = 'public' AND table_name IN ('videos', 'renditions', 'users', 'subtitles', 'watch_progress')`).Scan(&n)
+		if err != nil || n != 5 {
 			t.Errorf("tables = %d, err = %v", n, err)
 		}
 	})
