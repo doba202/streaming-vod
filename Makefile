@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f deploy/docker-compose.yml --env-file .env
 
-.PHONY: env up down logs logs-app ps test test-short build sample transcode run-api run-worker e2e-m2 e2e-m3 e2e-m4 seed-admin sign-url \
+.PHONY: env up down logs logs-app ps test test-short build sample transcode run-api run-worker e2e-m2 e2e-m3 e2e-m4 e2e-m5 seed-admin sign-url \
 	web-install web-dev web-test web-build
 
 # Tạo .env từ .env.example; nếu .env đã có thì bổ sung các khoá mới (vd. khoá M3) mà không ghi đè giá trị cũ.
@@ -78,6 +78,12 @@ e2e-m3: seed-admin
 e2e-m4: seed-admin
 	@test -f tmp/sample.mp4 || $(MAKE) sample
 	set -a; . ./.env; set +a; ./scripts/e2e-m4.sh tmp/sample.mp4
+
+# E2E M5: poster/sprite/thumbnails.vtt qua URL ký, phụ đề SRT → VTT, sự kiện xem → "Xem tiếp" + resume_at,
+# playback.events trong Kafka. `make e2e-m5 KAFKA_DOWN=1` thêm bước dừng Kafka (sự kiện xem vẫn 204).
+e2e-m5: seed-admin
+	@test -f tmp/sample.mp4 || $(MAKE) sample
+	set -a; . ./.env; set +a; COMPOSE="$(COMPOSE)" E2E_KAFKA_DOWN="$(KAFKA_DOWN)" ./scripts/e2e-m5.sh tmp/sample.mp4
 
 # Web người xem (web/app, cần Node 20.19+). `make up` tự build SPA trong image nginx, không cần Node trên máy.
 WEB := web/app
