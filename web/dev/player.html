@@ -14,18 +14,20 @@
 </head>
 <body>
 <h1>Streamfilm dev player</h1>
-<p>Mở <code>/dev/player.html?id=demo</code>. Trang tải <code>/hls/{id}/master.m3u8</code> qua nginx.</p>
+<p>Mở <code>/dev/player.html?src=&lt;URL ký&gt;</code>. Lấy URL ký từ <code>GET /api/videos/{id}/play</code>
+  (trường <code>url</code>) hoặc <code>make sign-url ID={id}</code>. URL hết hạn sau 2 giờ: nginx trả 403.</p>
 <video id="v" controls muted></video>
 <div id="levels"></div>
 <pre id="log"></pre>
 <script>
-  const id = new URLSearchParams(location.search).get('id') || 'demo';
-  const src = `/hls/${id}/master.m3u8`;
+  const src = new URLSearchParams(location.search).get('src');
   const video = document.getElementById('v');
   const logEl = document.getElementById('log');
   const log = (m) => { logEl.textContent += m + '\n'; logEl.scrollTop = logEl.scrollHeight; };
 
-  if (Hls.isSupported()) {
+  if (!src) {
+    log('thiếu ?src=<URL ký>');
+  } else if (Hls.isSupported()) {
     const hls = new Hls();
     hls.loadSource(src);
     hls.attachMedia(video);
@@ -49,7 +51,7 @@
       document.querySelectorAll('#levels button').forEach(b => b.classList.toggle('on', b.textContent === h + 'p'));
     });
     hls.on(Hls.Events.FRAG_LOADED, (_, d) => log(`segment ${d.frag.sn} @ level ${d.frag.level}`));
-    hls.on(Hls.Events.ERROR, (_, d) => log(`error: ${d.type} ${d.details}`));
+    hls.on(Hls.Events.ERROR, (_, d) => log(`error: ${d.type} ${d.details} ${d.response ? 'HTTP ' + d.response.code : ''}`));
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
     video.src = src; // Safari phát HLS gốc
   }

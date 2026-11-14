@@ -102,8 +102,12 @@ services:
   nginx:
     image: nginx:1.27-alpine
     ports: ["127.0.0.1:8088:80"]
+    environment:
+      # Entrypoint của image chạy envsubst trên /etc/nginx/templates/*.template → /etc/nginx/conf.d/.
+      CDN_SIGNING_SECRET: ${CDN_SIGNING_SECRET:?CDN_SIGNING_SECRET chưa đặt trong .env (chạy make env)}
+      NGINX_ENVSUBST_FILTER: "^CDN_"
     volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/templates:/etc/nginx/templates:ro
       - ../web/dev:/usr/share/nginx/html/dev:ro
     depends_on:
       minio: { condition: service_healthy }

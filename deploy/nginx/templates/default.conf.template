@@ -1,0 +1,47 @@
+# "CDN" giả lập (M3): chỉ phục vụ HLS qua URL có chữ ký.
+# Đây là template: lúc khởi động, image nginx chạy envsubst (chỉ với biến khớp NGINX_ENVSUBST_FILTER=^CDN_)
+# rồi ghi ra /etc/nginx/conf.d/default.conf. Biến nginx ($sl_exp, $uri, ...) giữ nguyên.
+proxy_cache_path /var/cache/nginx/hls levels=1:2 keys_zone=hls:10m max_size=1g inactive=7d use_temp_path=off;
+
+server {
+    listen 80;
+
+    location = /healthz { return 200 "ok\n"; }
+
+    # /cdn/s/{sig}/{exp}/hls/{id}/{file}
+    # sig = base64url(MD5("{exp}/hls/{id}/ {secret}")) không padding; khớp internal/signing (ADR 0009).
+    location ~ ^/cdn/s/(?<sl_sig>[^/]+)/(?<sl_exp>[^/]+)/hls/(?<sl_vid>[^/]+)/(?<sl_file>.+)$ {
+        secure_link $sl_sig,$sl_exp;
+        secure_link_md5 "$sl_exp/hls/$sl_vid/ ${CDN_SIGNING_SECRET}";
+
+        add_header Access-Control-Allow-Origin * always;
+        add_header X-Cache-Status $upstream_cache_status always;
+
+        # $secure_link: "" = chữ ký sai (hoặc exp không phải số), "0" = hết hạn, "1" = hợp lệ.
+        # Spec §4.3: sai hoặc hết hạn đều trả 403.
+        if ($secure_link = "") { return 403; }
+        if ($secure_link = "0") { return 403; }
+
+        # Bỏ prefix chữ ký rồi proxy tới MinIO: /hls/{id}/{file} = bucket hls, key {id}/{file}.
+        rewrite ^ /hls/$sl_vid/$sl_file break;
+        proxy_pass http://minio:9000;
+        proxy_cache hls;
+        proxy_cache_valid 200 7d;
+        # Không đưa chữ ký vào cache key: mọi người xem dùng chung một bản cache của segment.
+        proxy_cache_key "$sl_vid/$sl_file";
+    }
+
+    # URL /cdn/ sai dạng (thiếu sig/exp/id): coi như chữ ký sai.
+    location /cdn/ {
+        add_header Access-Control-Allow-Origin * always;
+        return 403;
+    }
+
+    # Trang test hls.js (M1): /dev/player.html?src=<URL ký từ /api/videos/{id}/play>.
+    location /dev/ {
+        root /usr/share/nginx/html;
+    }
+
+    # Không còn đường /hls/ không ký; mọi đường khác 404.
+    location / { return 404; }
+}
