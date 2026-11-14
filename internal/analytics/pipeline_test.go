@@ -255,3 +255,20 @@ func TestDedupTokenSortsPartitions(t *testing.T) {
 		t.Errorf("token = %s", got)
 	}
 }
+
+// SIGTERM giữa lúc INSERT thử lại: thử thêm đúng một lần với ctx không bị huỷ, cùng token, rồi commit.
+func TestPipelineRetriesInFlightBatchOnceOnShutdown(t *testing.T) {
+	p, src, sink, j := newTestPipeline(1, time.Hour, 1)
+	p.Backoff = func(int) time.Duration { return time.Hour } // đang chờ backoff thì bị huỷ
+	stop := start(t, p)
+	src.push("a")
+	eventually(t, "lần INSERT đầu thất bại", func() bool { c, _, _ := sink.snapshot(); return c >= 1 })
+	stop()
+	calls, bodies, tokens := sink.snapshot()
+	if calls != 2 || len(bodies) != 1 || tokens[0] != "tbl/t/0:0-0" {
+		t.Errorf("calls=%d bodies=%q tokens=%q", calls, bodies, tokens)
+	}
+	if got := strings.Join(j.list(), ","); got != "insert-fail,insert,commit 1" {
+		t.Errorf("ops = %s", got)
+	}
+}

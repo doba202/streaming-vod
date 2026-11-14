@@ -96,7 +96,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			if len(b.recs) > 0 {
 				sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ShutdownTimeout)
-				if err := p.flush(sctx, &b); err != nil {
+				if err := p.flush(sctx, &b, 0); err != nil {
 					p.Log.Warn("pending batch not written on shutdown, will be re-read", "records", len(b.recs), "err", err)
 				}
 				cancel()
@@ -105,8 +105,15 @@ func (p *Pipeline) Run(ctx context.Context) error {
 			return nil
 		}
 		if len(b.recs) > 0 && (len(b.recs) >= p.MaxBatch || !time.Now().Before(b.deadline)) {
-			if err := p.flush(ctx, &b); err != nil {
-				// ctx bị huỷ khi đang thử lại: không commit, lô được đọc lại ở lần chạy sau.
+			if err := p.flush(ctx, &b, 0); err != nil {
+				// ctx bị huỷ khi đang INSERT/chờ backoff (SIGTERM): thử đúng một lần nữa, cùng lô và cùng
+				// dedup token, trong ShutdownTimeout. Không thành công thì không commit, lô được đọc lại.
+				sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ShutdownTimeout)
+				err = p.flush(sctx, &b, 1)
+				cancel()
+				if err != nil {
+					p.Log.Warn("in-flight batch not written on shutdown, will be re-read", "records", len(b.recs), "err", err)
+				}
 				p.Source.AllowRebalance()
 				return nil
 			}
@@ -133,8 +140,8 @@ func (p *Pipeline) add(b *batch, rec *kgo.Record) {
 	b.rows++
 }
 
-// flush ghi lô (thử lại tới khi thành công hoặc ctx bị huỷ) rồi commit offset của mọi record trong lô.
-func (p *Pipeline) flush(ctx context.Context, b *batch) error {
+// flush ghi lô (thử lại tới khi thành công, ctx bị huỷ hoặc hết maxAttempts; 0 = không giới hạn) rồi commit offset của mọi record trong lô.
+func (p *Pipeline) flush(ctx context.Context, b *batch, maxAttempts int) error {
 	if b.rows > 0 {
 		token := DedupToken(p.Table, b.recs)
 		for attempt := 1; ; attempt++ {
@@ -146,6 +153,9 @@ func (p *Pipeline) flush(ctx context.Context, b *batch) error {
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if maxAttempts > 0 && attempt >= maxAttempts {
+				return err
 			}
 			wait := p.Backoff(attempt)
 			p.Log.Error("clickhouse insert failed, retrying", "rows", b.rows, "attempt", attempt,
