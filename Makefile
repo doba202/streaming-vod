@@ -74,6 +74,11 @@ e2e-m3: seed-admin
 	@test -f tmp/sample.mp4 || $(MAKE) sample
 	set -a; . ./.env; set +a; ./scripts/e2e-m3.sh tmp/sample.mp4
 
+# E2E M4: SPA + /api/ cùng origin qua nginx, tìm kiếm không dấu (chạy kèm luồng M2 qua nginx).
+e2e-m4: seed-admin
+	@test -f tmp/sample.mp4 || $(MAKE) sample
+	set -a; . ./.env; set +a; ./scripts/e2e-m4.sh tmp/sample.mp4
+
 # Web người xem (web/app, cần Node 20.19+). `make up` tự build SPA trong image nginx, không cần Node trên máy.
 WEB := web/app
 
