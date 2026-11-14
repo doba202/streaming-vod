@@ -1,7 +1,7 @@
 import Hls, { type ErrorData } from 'hls.js';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { PlaybackSession, classifyHlsError } from '../player/recovery';
+import { MediaRecovery, PlaybackSession, classifyHlsError } from '../player/recovery';
 
 interface Level {
   index: number;
@@ -25,6 +25,20 @@ export function Player({ videoId }: { videoId: string }) {
     setLevels([]);
     setLevel(-1);
 
+    const mediaRecovery = new MediaRecovery();
+    let lastProgress = video.currentTime;
+    // Phát tiến triển (currentTime tăng) thì coi như đã phục hồi: cho phép cứu lại từ đầu.
+    const onTimeUpdate = () => {
+      if (video.currentTime > lastProgress + 1) mediaRecovery.reset();
+      lastProgress = video.currentTime;
+    };
+    video.addEventListener('timeupdate', onTimeUpdate);
+    let pendingMeta: (() => void) | null = null;
+    const clearPendingMeta = () => {
+      if (pendingMeta) video.removeEventListener('loadedmetadata', pendingMeta);
+      pendingMeta = null;
+    };
+
     const session = new PlaybackSession({
       fetchPlay: () => api.play(videoId),
       currentTime: () => video.currentTime,
@@ -33,6 +47,11 @@ export function Player({ videoId }: { videoId: string }) {
         const resume = !video.paused;
         hlsRef.current?.destroy();
         hlsRef.current = null;
+        clearPendingMeta();
+        mediaRecovery.reset();
+        lastProgress = startAt;
+        // Hls mới luôn bắt đầu ở "Tự động": đưa dropdown về cùng trạng thái.
+        setLevel(-1);
         if (Hls.isSupported()) {
           const hls = new Hls({ startPosition: startAt > 0 ? startAt : -1 });
           hlsRef.current = hls;
@@ -45,9 +64,16 @@ export function Player({ videoId }: { videoId: string }) {
               case 'refresh':
                 void session.refresh();
                 break;
-              case 'media':
-                hls.recoverMediaError();
+              case 'media': {
+                const step = mediaRecovery.next();
+                if (step === 'fatal') {
+                  setError('Không phát được video.');
+                } else {
+                  if (step === 'swap-recover') hls.swapAudioCodec();
+                  hls.recoverMediaError();
+                }
                 break;
+              }
               case 'fatal':
                 setError('Không phát được video.');
                 break;
@@ -57,14 +83,12 @@ export function Player({ videoId }: { videoId: string }) {
           hls.attachMedia(video);
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
           video.src = url;
-          video.addEventListener(
-            'loadedmetadata',
-            () => {
-              if (startAt > 0) video.currentTime = startAt;
-              if (resume) void video.play().catch(() => undefined);
-            },
-            { once: true },
-          );
+          pendingMeta = () => {
+            pendingMeta = null;
+            if (startAt > 0) video.currentTime = startAt;
+            if (resume) void video.play().catch(() => undefined);
+          };
+          video.addEventListener('loadedmetadata', pendingMeta, { once: true });
         } else {
           setError('Trình duyệt không hỗ trợ HLS.');
         }
@@ -81,6 +105,8 @@ export function Player({ videoId }: { videoId: string }) {
     return () => {
       session.dispose();
       video.removeEventListener('error', onNativeError);
+      video.removeEventListener('timeupdate', onTimeUpdate);
+      clearPendingMeta();
       hlsRef.current?.destroy();
       hlsRef.current = null;
       video.removeAttribute('src');

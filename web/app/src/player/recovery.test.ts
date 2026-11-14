@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, type PlayInfo } from '../api';
-import { PlaybackSession, classifyHlsError } from './recovery';
+import { MediaRecovery, PlaybackSession, classifyHlsError } from './recovery';
 
 const play = (n: number, resumeAt = 0): PlayInfo => ({
   url: `http://localhost:8088/cdn/s/sig${n}/100${n}/hls/v/master.m3u8`,
@@ -99,5 +99,17 @@ describe('PlaybackSession', () => {
     await p;
     await session.refresh();
     expect(load).not.toHaveBeenCalled();
+  });
+});
+
+describe('MediaRecovery', () => {
+  it('lần 1 recover, lần 2 đổi codec rồi recover, lần 3 báo lỗi; reset cho cứu lại', () => {
+    const r = new MediaRecovery();
+    expect(r.next()).toBe('recover');
+    expect(r.next()).toBe('swap-recover');
+    expect(r.next()).toBe('fatal');
+    expect(r.next()).toBe('fatal');
+    r.reset();
+    expect(r.next()).toBe('recover');
   });
 });

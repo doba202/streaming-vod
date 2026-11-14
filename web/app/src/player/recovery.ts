@@ -24,6 +24,26 @@ export function classifyHlsError(e: HlsErrorLike): RecoveryAction | null {
   return 'fatal';
 }
 
+// MediaRecovery giới hạn số lần cứu lỗi media fatal: lần 1 recoverMediaError(), lần 2 swapAudioCodec()
+// rồi recoverMediaError(), lần 3 trở đi báo lỗi. reset() khi phát tiến triển hoặc nạp nguồn mới.
+export const MAX_MEDIA_RECOVERIES = 2;
+export type MediaRecoveryStep = 'recover' | 'swap-recover' | 'fatal';
+
+export class MediaRecovery {
+  private attempts = 0;
+
+  next(): MediaRecoveryStep {
+    this.attempts++;
+    if (this.attempts === 1) return 'recover';
+    if (this.attempts <= MAX_MEDIA_RECOVERIES) return 'swap-recover';
+    return 'fatal';
+  }
+
+  reset(): void {
+    this.attempts = 0;
+  }
+}
+
 export interface PlaybackDeps {
   fetchPlay: () => Promise<PlayInfo>;
   // load nạp URL HLS và bắt đầu phát từ startAt giây (0 = đầu phim).

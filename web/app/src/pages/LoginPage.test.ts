@@ -7,5 +7,6 @@ describe('returnTo', () => {
     expect(returnTo(null)).toBe('/');
     expect(returnTo({ from: 'https://evil.example' })).toBe('/');
     expect(returnTo({ from: '//evil.example' })).toBe('/');
+    expect(returnTo({ from: '/\\evil.example' })).toBe('/');
   });
 });

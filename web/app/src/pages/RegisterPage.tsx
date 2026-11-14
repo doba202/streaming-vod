@@ -4,10 +4,11 @@ import { AuthForm } from '../components/AuthForm';
 import { returnTo } from './LoginPage';
 
 export function RegisterPage() {
-  const { user, register } = useAuth();
+  const { user, loading, register } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const next = returnTo(location.state);
+  if (loading) return <p className="status">Đang tải…</p>;
   if (user) return <Navigate to={next} replace />;
   return (
     <main className="auth-page">

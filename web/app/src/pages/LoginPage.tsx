@@ -5,14 +5,15 @@ import { AuthForm } from '../components/AuthForm';
 // returnTo: trang người dùng định mở trước khi bị chuyển tới /login (RequireAuth ghi vào state.from).
 export function returnTo(state: unknown): string {
   const from = (state as { from?: unknown } | null)?.from;
-  return typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') ? from : '/';
+  return typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') && !from.includes('\\') ? from : '/';
 }
 
 export function LoginPage() {
-  const { user, login } = useAuth();
+  const { user, loading, login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const next = returnTo(location.state);
+  if (loading) return <p className="status">Đang tải…</p>;
   if (user) return <Navigate to={next} replace />;
   return (
     <main className="auth-page">

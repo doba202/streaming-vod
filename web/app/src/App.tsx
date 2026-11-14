@@ -1,6 +1,7 @@
 import { Suspense, lazy } from 'react';
 import { Link, Outlet, Route, Routes } from 'react-router-dom';
 import { RequireAuth } from './auth';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Header } from './components/Header';
 import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
@@ -16,9 +17,11 @@ function Layout() {
     <>
       <Header />
       <main className="content">
-        <Suspense fallback={<p className="status">Đang tải…</p>}>
-          <Outlet />
-        </Suspense>
+        <ErrorBoundary>
+          <Suspense fallback={<p className="status">Đang tải…</p>}>
+            <Outlet />
+          </Suspense>
+        </ErrorBoundary>
       </main>
     </>
   );
