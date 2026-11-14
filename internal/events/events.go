@@ -16,6 +16,7 @@ const (
 	TopicVideoProcessing  = "video.processing"
 	TopicVideoTranscoded  = "video.transcoded"
 	TopicVideoFailed      = "video.failed"
+	TopicPlaybackEvents   = "playback.events"
 )
 
 var VideoTopics = []string{TopicVideoUploaded, TopicVideoUploadedDLQ, TopicVideoProcessing,
@@ -64,11 +65,24 @@ type DeadLetter struct {
 	FailedAt time.Time       `json:"failed_at"`
 }
 
+// PlaybackEvent: sự kiện xem phim (spec §3.3, §4.4). api publish, analytics (M6) ghi vào ClickHouse.
+// Key = user_id (không phải video_id) để các sự kiện của một người xem giữ đúng thứ tự.
+type PlaybackEvent struct {
+	TS          time.Time `json:"ts"`
+	UserID      string    `json:"user_id"`
+	VideoID     string    `json:"video_id"`
+	Type        string    `json:"type"`
+	PositionS   int       `json:"position_s"`
+	BitrateKbps int       `json:"bitrate_kbps"`
+	BufferingMs int       `json:"buffering_ms"`
+}
+
 func (e VideoUploaded) Key() string   { return e.VideoID }
 func (e VideoProcessing) Key() string { return e.VideoID }
 func (e VideoTranscoded) Key() string { return e.VideoID }
 func (e VideoFailed) Key() string     { return e.VideoID }
 func (e DeadLetter) Key() string      { return e.VideoID }
+func (e PlaybackEvent) Key() string   { return e.UserID }
 
 // NewRecord mã hoá ev thành record Kafka với key = ev.Key().
 func NewRecord(topic string, ev Event) (*kgo.Record, error) {
@@ -79,14 +93,14 @@ func NewRecord(topic string, ev Event) (*kgo.Record, error) {
 	return &kgo.Record{Topic: topic, Key: []byte(ev.Key()), Value: b}, nil
 }
 
-// Decode parse JSON và bắt buộc có video_id.
+// Decode parse JSON và bắt buộc có key (video_id; user_id với PlaybackEvent).
 func Decode[T Event](data []byte) (T, error) {
 	var v T
 	if err := json.Unmarshal(data, &v); err != nil {
 		return v, fmt.Errorf("decode event: %w", err)
 	}
 	if v.Key() == "" {
-		return v, errors.New("decode event: missing video_id")
+		return v, errors.New("decode event: missing key (video_id or user_id)")
 	}
 	return v, nil
 }

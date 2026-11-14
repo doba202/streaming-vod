@@ -69,3 +69,23 @@ func TestVideoTopics(t *testing.T) {
 		t.Errorf("VideoTopics = %v", VideoTopics)
 	}
 }
+
+func TestPlaybackEventRecord(t *testing.T) {
+	ev := PlaybackEvent{TS: time.Date(2026, 11, 15, 10, 0, 0, 123e6, time.UTC), UserID: "u1", VideoID: "v1",
+		Type: "heartbeat", PositionS: 42, BitrateKbps: 2800, BufferingMs: 0}
+	rec, err := NewRecord(TopicPlaybackEvents, ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"ts":"2026-11-15T10:00:00.123Z","user_id":"u1","video_id":"v1","type":"heartbeat","position_s":42,"bitrate_kbps":2800,"buffering_ms":0}`
+	if string(rec.Value) != want || string(rec.Key) != "u1" || rec.Topic != "playback.events" {
+		t.Errorf("record = %s key=%s topic=%s", rec.Value, rec.Key, rec.Topic)
+	}
+	got, err := Decode[PlaybackEvent](rec.Value)
+	if err != nil || !reflect.DeepEqual(got, ev) {
+		t.Errorf("decode = %+v, err = %v", got, err)
+	}
+	if _, err := Decode[PlaybackEvent]([]byte(`{"video_id":"v1"}`)); err == nil {
+		t.Error("thiếu user_id phải lỗi")
+	}
+}
