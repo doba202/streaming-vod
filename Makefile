@@ -94,6 +94,12 @@ e2e-m5: seed-admin
 	@test -f tmp/sample.mp4 || $(MAKE) sample
 	set -a; . ./.env; set +a; COMPOSE="$(COMPOSE)" E2E_KAFKA_DOWN="$(KAFKA_DOWN)" ./scripts/e2e-m5.sh tmp/sample.mp4
 
+# E2E M6: sự kiện xem + log api/transcoder vào ClickHouse qua analytics, record hỏng bị bỏ qua, SQL mẫu chạy được.
+# `make e2e-m6 CH_DOWN=1` thêm bước dừng ClickHouse (analytics thử lại, không mất sự kiện).
+e2e-m6: seed-admin
+	@test -f tmp/sample.mp4 || $(MAKE) sample
+	set -a; . ./.env; set +a; COMPOSE="$(COMPOSE)" E2E_CLICKHOUSE_DOWN="$(CH_DOWN)" ./scripts/e2e-m6.sh tmp/sample.mp4
+
 # Web người xem (web/app, cần Node 20.19+). `make up` tự build SPA trong image nginx, không cần Node trên máy.
 WEB := web/app
 
