@@ -20,3 +20,21 @@ export function posterHue(id: string): number {
   for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) % 360;
   return h;
 }
+
+// formatBytes: 0 → "0 B", 1536 → "1.5 KB", 31_457_280 → "30 MB" (cơ số 1024, tối đa một chữ số thập phân).
+export function formatBytes(n: number): string {
+  if (!n || n < 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${i === 0 ? v : Number(v.toFixed(1))} ${units[i]}`;
+}
+
+// parseGenres: "drama, Hài ,, drama" → ["drama", "Hài"] (tách theo dấu phẩy, bỏ rỗng và trùng).
+export function parseGenres(s: string): string[] {
+  return [...new Set(s.split(',').map((g) => g.trim()).filter(Boolean))];
+}

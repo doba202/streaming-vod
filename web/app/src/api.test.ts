@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, api, sendPlaybackEvent, setUnauthorizedHandler, videosQueryString } from './api';
+import { ApiError, adminApi, api, sendPlaybackEvent, setUnauthorizedHandler, videosQueryString } from './api';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -87,5 +87,45 @@ describe('M5', () => {
 
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network down')));
     expect(() => sendPlaybackEvent(ev)).not.toThrow();
+  });
+});
+
+describe('adminApi (M7)', () => {
+  const ok = (body: unknown, status = 200) =>
+    vi.fn().mockResolvedValue(new Response(status === 204 ? null : JSON.stringify(body), { status }));
+
+  it('list lấy tối đa 200 video, update gửi PATCH JSON, remove nhận 204', async () => {
+    let fetchMock = ok({ videos: [{ id: 'v1', status: 'failed' }] });
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await adminApi.list()).toEqual([{ id: 'v1', status: 'failed' }]);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/admin/videos?limit=200');
+
+    fetchMock = ok({ id: 'v1', title: 'Mới' });
+    vi.stubGlobal('fetch', fetchMock);
+    await adminApi.update('v1', { title: 'Mới', year: 0 });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/admin/videos/v1');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body as string)).toEqual({ title: 'Mới', year: 0 });
+
+    fetchMock = ok(null, 204);
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(adminApi.remove('v1')).resolves.toBeUndefined();
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('DELETE');
+  });
+
+  it('uploadSubtitle gửi FormData, không đặt Content-Type JSON', async () => {
+    const fetchMock = ok({ lang: 'vi', label: 'Tiếng Việt', vtt_key: 'v1/subs/vi.vtt' }, 201);
+    vi.stubGlobal('fetch', fetchMock);
+    const file = new File(['1\n00:00:01,000 --> 00:00:02,000\nXin chào\n'], 'vi.srt');
+    await adminApi.uploadSubtitle('v1', 'vi', 'Tiếng Việt', file);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/admin/videos/v1/subtitles');
+    expect(init.body).toBeInstanceOf(FormData);
+    const form = init.body as FormData;
+    expect(form.get('lang')).toBe('vi');
+    expect(form.get('label')).toBe('Tiếng Việt');
+    expect((form.get('file') as File).name).toBe('vi.srt');
+    expect(new Headers(init.headers).get('Content-Type')).toBeNull();
   });
 });
