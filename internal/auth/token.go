@@ -60,13 +60,15 @@ func (t *Tokens) Issue(id Identity) (string, time.Time, error) {
 	return s, exp, nil
 }
 
-// Parse chỉ nhận HS256 (chặn "alg":"none" và nhầm thuật toán), bắt buộc có exp và đúng issuer.
+// Parse chỉ nhận HS256 (chặn "alg":"none" và nhầm thuật toán), bắt buộc có exp, đúng issuer và iat (nếu có)
+// không ở tương lai.
 func (t *Tokens) Parse(s string) (Identity, error) {
 	var c claims
 	_, err := jwt.ParseWithClaims(s, &c, func(*jwt.Token) (any, error) { return t.secret, nil },
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 		jwt.WithIssuer(issuer),
 		jwt.WithExpirationRequired(),
+		jwt.WithIssuedAt(),
 		jwt.WithTimeFunc(t.now),
 	)
 	if err != nil {

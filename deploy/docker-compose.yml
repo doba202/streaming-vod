@@ -192,8 +192,8 @@ services:
       kafka-init: { condition: service_completed_successfully }
       clickhouse: { condition: service_healthy }
     restart: unless-stopped
-    # Đủ cho lần ghi nốt lô đang dở khi tắt (ShutdownTimeout 10 giây).
-    stop_grace_period: 15s
+    # Khi tắt: chờ INSERT đang chạy (InsertTimeout 10 giây) rồi ghi nốt lô (ShutdownTimeout 10 giây) = tối đa 20 giây.
+    stop_grace_period: 25s
 
 volumes:
   pgdata:

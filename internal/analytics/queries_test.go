@@ -18,6 +18,7 @@ func TestSampleQueries(t *testing.T) {
 	ts := func(sec int) string { return CHTimeString(now.Add(time.Duration(sec) * time.Second)) }
 	const (
 		u1, u2 = "11111111-1111-1111-1111-111111111111", "33333333-3333-3333-3333-333333333333"
+		u3     = "44444444-4444-4444-4444-444444444444" // chỉ có ended (play bị mất): không làm tỉ lệ xem hết > 1
 		v1     = "22222222-2222-2222-2222-222222222222"
 	)
 	var rows []string
@@ -26,7 +27,7 @@ func TestSampleQueries(t *testing.T) {
 		bitrate, buf int
 	}{
 		{u1, "play", 2800, 0}, {u2, "play", 1400, 0}, {u1, "buffering", 2800, 1500}, {u2, "buffering", 1400, 500},
-		{u2, "buffering", 1400, 700}, {u1, "ended", 2800, 0},
+		{u2, "buffering", 1400, 700}, {u1, "ended", 2800, 0}, {u3, "ended", 2800, 0},
 	} {
 		b, _ := json.Marshal(map[string]any{"ts": ts(len(rows)), "user_id": e.user, "video_id": v1, "type": e.typ,
 			"position_s": 0, "bitrate_kbps": e.bitrate, "buffering_ms": e.buf})

@@ -80,6 +80,8 @@ type MinIO struct {
 }
 
 // StartMinIO chạy MinIO trong container. Skip khi -short hoặc không có Docker.
+// Đợi /minio/health/ready (không phải /live như mặc định của module): /live trả 200 trước khi MinIO nhận
+// request S3, khiến lệnh đầu tiên đôi khi lỗi "Server not initialized yet".
 func StartMinIO(t *testing.T) MinIO {
 	t.Helper()
 	if testing.Short() {
@@ -87,7 +89,8 @@ func StartMinIO(t *testing.T) MinIO {
 	}
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 	ctx := context.Background()
-	ctr, err := tcminio.Run(ctx, MinIOImage)
+	ctr, err := tcminio.Run(ctx, MinIOImage, testcontainers.WithWaitStrategy(
+		wait.ForHTTP("/minio/health/ready").WithPort("9000/tcp").WithStartupTimeout(time.Minute)))
 	testcontainers.CleanupContainer(t, ctr)
 	if err != nil {
 		t.Fatal(err)

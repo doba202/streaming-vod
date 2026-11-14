@@ -77,6 +77,7 @@ func run(log *slog.Logger) error {
 	}()
 	log = logging.New("api", os.Stdout, logSink)
 	slog.SetDefault(log)
+	go auth.WarmUp() // bcrypt dummy hash chạy nền trong lúc kết nối DB, Kafka
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

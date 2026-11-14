@@ -73,12 +73,16 @@ func TestParseRejects(t *testing.T) {
 	badRole, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": "u1", "role": "root", "iss": "streamfilm", "exp": now.Add(time.Hour).Unix(),
 	}).SignedString([]byte(testSecret))
+	// iat ở tương lai (token giả mạo hoặc đồng hồ server lệch): jwt.WithIssuedAt từ chối.
+	future, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "u1", "role": "admin", "iss": "streamfilm", "iat": now.Add(time.Hour).Unix(), "exp": now.Add(2 * time.Hour).Unix(),
+	}).SignedString([]byte(testSecret))
 	parts := strings.Split(good, ".")
 	tampered := parts[0] + "." + parts[1] + "x." + parts[2]
 
 	cases := map[string]string{
 		"other secret": otherTok, "alg none": none, "no exp": noExp, "bad role": badRole,
-		"tampered": tampered, "garbage": "abc", "empty": "",
+		"tampered": tampered, "garbage": "abc", "empty": "", "iat in future": future,
 	}
 	for name, tok := range cases {
 		if _, err := tk.Parse(tok); !errors.Is(err, ErrInvalidToken) {

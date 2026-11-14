@@ -129,3 +129,15 @@ func TestSeedAdmin(t *testing.T) {
 		t.Errorf("short password: err = %v", err)
 	}
 }
+
+func TestWarmUp(t *testing.T) {
+	WarmUp()
+	start := time.Now()
+	h := dummyHash()
+	if d := time.Since(start); d > 50*time.Millisecond {
+		t.Errorf("dummyHash after WarmUp took %v, want cached", d)
+	}
+	if !CheckPassword(h, "streamfilm-dummy-password") {
+		t.Error("dummy hash must be a valid bcrypt hash")
+	}
+}

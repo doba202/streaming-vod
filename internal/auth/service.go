@@ -28,6 +28,10 @@ var dummyHash = sync.OnceValue(func() string {
 	return h
 })
 
+// WarmUp tính sẵn dummyHash (bcrypt, ~250ms) để request đăng nhập đầu tiên với email lạ không chậm hơn
+// các request sau (chênh lệch thời gian đó lộ email chưa đăng ký). api gọi lúc khởi động.
+func WarmUp() { dummyHash() }
+
 // Register tạo tài khoản viewer.
 func (s *Service) Register(ctx context.Context, email, password string) (User, error) {
 	email, err := NormalizeEmail(email)
