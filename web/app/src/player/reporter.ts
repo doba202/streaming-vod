@@ -3,6 +3,9 @@
 import type { PlaybackEvent, PlaybackEventType } from '../api';
 
 export const HEARTBEAT_MS = 10_000;
+// Giới hạn của server (POST /api/playback/events): vượt là 400.
+export const MAX_BUFFERING_MS = 600_000;
+export const MAX_BITRATE_KBPS = 100_000;
 
 export interface ReporterDeps {
   videoId: string;
@@ -33,6 +36,7 @@ export class PlaybackReporter {
 
   pause(): void {
     this.stopHeartbeat();
+    this.bufferingSince = null;
     if (this.started) this.emit('pause');
   }
 
@@ -42,6 +46,7 @@ export class PlaybackReporter {
 
   ended(): void {
     this.stopHeartbeat();
+    this.bufferingSince = null;
     this.emit('ended');
   }
 
@@ -53,7 +58,7 @@ export class PlaybackReporter {
   // playing: phát lại sau khi chờ → một sự kiện buffering với thời gian đã chờ.
   playing(): void {
     if (this.bufferingSince === null) return;
-    const ms = Math.max(0, Math.round(this.deps.now() - this.bufferingSince));
+    const ms = Math.min(MAX_BUFFERING_MS, Math.max(0, Math.round(this.deps.now() - this.bufferingSince)));
     this.bufferingSince = null;
     this.emit('buffering', ms);
   }
@@ -65,6 +70,7 @@ export class PlaybackReporter {
 
   dispose(): void {
     this.stopHeartbeat();
+    this.bufferingSince = null;
   }
 
   private stopHeartbeat(): void {
@@ -77,8 +83,8 @@ export class PlaybackReporter {
       video_id: this.deps.videoId,
       type,
       position_s: Math.round(this.deps.position() * 1000) / 1000,
-      bitrate_kbps: Math.max(0, Math.round(this.deps.bitrateKbps())),
-      buffering_ms: bufferingMs,
+      bitrate_kbps: Math.min(MAX_BITRATE_KBPS, Math.max(0, Math.round(this.deps.bitrateKbps()))),
+      buffering_ms: Math.min(MAX_BUFFERING_MS, bufferingMs),
     });
   }
 }

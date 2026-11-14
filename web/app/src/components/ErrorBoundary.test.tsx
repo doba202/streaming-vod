@@ -11,6 +11,9 @@ describe('ErrorBoundary', () => {
 
   it('hiện thông báo và nút tải lại khi con ném lỗi', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // jsdom báo lỗi chưa bắt lên window ('error' event → "Error: Uncaught [...]"); chặn để output sạch.
+    const quiet = (e: Event) => e.preventDefault();
+    window.addEventListener('error', quiet);
     const reload = vi.fn();
     vi.stubGlobal('location', { ...window.location, reload });
     render(
@@ -22,6 +25,7 @@ describe('ErrorBoundary', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Tải lại' }));
     expect(reload).toHaveBeenCalled();
     vi.unstubAllGlobals();
+    window.removeEventListener('error', quiet);
   });
 
   it('render bình thường khi không lỗi', () => {

@@ -71,6 +71,39 @@ describe('PlaybackReporter', () => {
     ]);
   });
 
+  it('buffering: pause/ended/dispose xoá mốc chờ, playing sau đó không gửi thời gian cũ', () => {
+    for (const stop of ['pause', 'ended', 'dispose'] as const) {
+      const { r, sent, advance } = setup();
+      r.play();
+      r.waiting();
+      advance(5_000);
+      r[stop]();
+      advance(60_000);
+      r.playing();
+      expect(sent.filter((e) => e.type === 'buffering')).toEqual([]);
+    }
+  });
+
+  it('kẹp buffering_ms ≤ 600000 và bitrate_kbps ≤ 100000 (giới hạn của server)', () => {
+    const sent: PlaybackEvent[] = [];
+    let clock = 0;
+    const r = new PlaybackReporter({
+      videoId: 'v1',
+      send: (ev) => sent.push(ev),
+      position: () => 1,
+      bitrateKbps: () => 5_000_000,
+      now: () => clock,
+    });
+    r.play();
+    r.waiting();
+    clock += 3_600_000;
+    r.playing();
+    const b = sent.find((e) => e.type === 'buffering');
+    expect(b?.buffering_ms).toBe(600_000);
+    expect(b?.bitrate_kbps).toBe(100_000);
+    r.dispose();
+  });
+
   it('flush gửi heartbeat vị trí cuối khi đã xem', () => {
     const { r, types, setPos } = setup();
     r.flush();
