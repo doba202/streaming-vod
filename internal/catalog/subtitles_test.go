@@ -198,3 +198,51 @@ func TestRepoSubtitles(t *testing.T) {
 		t.Errorf("video không tồn tại: err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestSubtitleUploadCanonicalID(t *testing.T) {
+	const id = "abcdefab-1111-2222-3333-444444444444"
+	store := &fakeSubtitleStore{videos: map[string]Video{id: {ID: id, Status: StatusReady}}}
+	put := &fakePutter{}
+	h := newSubtitleRouter(store, put)
+	body, ct := subtitleForm(t, "vi", "Việt", "a.srt", []byte(testSRT))
+	rec := postSubtitle(h, strings.ToUpper(id), body, ct) // uuid.Parse chấp nhận chữ hoa
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	var out AdminSubtitleJSON
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if out.VTTKey != id+"/subs/vi.vtt" || len(put.calls) != 1 || put.calls[0].key != id+"/subs/vi.vtt" ||
+		len(store.saved) != 1 || store.saved[0].VTTKey != id+"/subs/vi.vtt" {
+		t.Errorf("key phải theo uuid chuẩn: out=%+v put=%+v saved=%+v", out, put.calls, store.saved)
+	}
+}
+
+func TestSubtitleUploadFormOnlyFields(t *testing.T) {
+	store := &fakeSubtitleStore{videos: map[string]Video{idA: {ID: idA}}}
+	h := newSubtitleRouter(store, &fakePutter{})
+	// lang/label chỉ lấy từ body multipart, không từ query string.
+	body, ct := subtitleForm(t, "", "Việt", "a.srt", []byte(testSRT))
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/videos/"+idA+"/subtitles?lang=vi", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "lang") || len(store.saved) != 0 {
+		t.Errorf("code = %d body = %s saved = %+v", rec.Code, rec.Body, store.saved)
+	}
+}
+
+func TestSubtitleUploadBodyOverCap(t *testing.T) {
+	store := &fakeSubtitleStore{videos: map[string]Video{idA: {ID: idA}}}
+	put := &fakePutter{}
+	h := newSubtitleRouter(store, put)
+	// Lớn hơn MaxSubtitleBytes + formOverhead: MaxBytesReader chặn khi parse multipart.
+	huge := bytes.Repeat([]byte("a"), MaxSubtitleBytes+formOverhead+1)
+	body, ct := subtitleForm(t, "vi", "Việt", "a.srt", huge)
+	rec := postSubtitle(h, idA, body, ct)
+	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), "1 MiB") {
+		t.Errorf("code = %d body = %s", rec.Code, rec.Body)
+	}
+	if len(put.calls) != 0 || len(store.saved) != 0 {
+		t.Errorf("không được ghi gì: %+v %+v", put.calls, store.saved)
+	}
+}

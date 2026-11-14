@@ -102,11 +102,12 @@ const formOverhead = 64 << 10
 // upload nhận multipart/form-data: lang, label, file (.srt hoặc .vtt, ≤ 1 MiB, UTF-8). SRT được chuyển
 // sang WebVTT; lưu vào hls/{id}/subs/{lang}.vtt (ghi đè nếu đã có) rồi upsert bảng subtitles.
 func (h *SubtitleHandler) upload(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if _, err := uuid.Parse(id); err != nil {
+	parsed, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
 		httpx.WriteError(w, http.StatusNotFound, "video not found")
 		return
 	}
+	id := parsed.String() // dạng chuẩn (chữ thường): dùng cho key object, DB và phản hồi
 	r.Body = http.MaxBytesReader(w, r.Body, MaxSubtitleBytes+formOverhead)
 	if err := r.ParseMultipartForm(MaxSubtitleBytes + formOverhead); err != nil {
 		var tooBig *http.MaxBytesError
@@ -119,12 +120,12 @@ func (h *SubtitleHandler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.MultipartForm.RemoveAll()
 
-	lang := r.FormValue("lang")
+	lang := r.PostFormValue("lang")
 	if !LangRe.MatchString(lang) {
 		httpx.WriteError(w, http.StatusBadRequest, `lang must look like "vi", "en" or "pt-BR"`)
 		return
 	}
-	label := strings.TrimSpace(r.FormValue("label"))
+	label := strings.TrimSpace(r.PostFormValue("label"))
 	if label == "" || !utf8.ValidString(label) || utf8.RuneCountInString(label) > MaxLabelLen ||
 		strings.IndexFunc(label, unicode.IsControl) >= 0 {
 		httpx.WriteError(w, http.StatusBadRequest, fmt.Sprintf("label must be 1-%d characters of text", MaxLabelLen))
