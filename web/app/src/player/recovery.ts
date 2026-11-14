@@ -46,6 +46,9 @@ export class MediaRecovery {
 
 export interface PlaybackDeps {
   fetchPlay: () => Promise<PlayInfo>;
+  // onInfo nhận mọi PlayInfo mới (lần đầu và sau mỗi lần làm mới), trước load: phụ đề và thumbnails có
+  // URL ký mới cùng lúc với master.
+  onInfo?: (p: PlayInfo) => void;
   // load nạp URL HLS và bắt đầu phát từ startAt giây (0 = đầu phim).
   load: (url: string, startAt: number) => void;
   currentTime: () => number;
@@ -70,14 +73,16 @@ export class PlaybackSession {
   private disposed = false;
 
   constructor(deps: PlaybackDeps) {
-    this.deps = { now: Date.now, maxRefreshes: 3, refreshWindowMs: 60_000, ...deps };
+    this.deps = { now: Date.now, maxRefreshes: 3, refreshWindowMs: 60_000, onInfo: () => undefined, ...deps };
   }
 
   // start gọi /play lần đầu và phát từ resume_at.
   async start(): Promise<void> {
     try {
       const p = await this.deps.fetchPlay();
-      if (!this.disposed) this.deps.load(p.url, p.resume_at);
+      if (this.disposed) return;
+      this.deps.onInfo(p);
+      this.deps.load(p.url, p.resume_at);
     } catch (err) {
       if (!this.disposed) this.deps.onFatal(playErrorMessage(err));
     }
@@ -100,7 +105,9 @@ export class PlaybackSession {
     this.inflight = this.deps
       .fetchPlay()
       .then((p) => {
-        if (!this.disposed) this.deps.load(p.url, at);
+        if (this.disposed) return;
+        this.deps.onInfo(p);
+        this.deps.load(p.url, at);
       })
       .catch((err: unknown) => {
         if (!this.disposed) this.deps.onFatal(playErrorMessage(err));

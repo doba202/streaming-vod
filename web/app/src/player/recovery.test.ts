@@ -113,3 +113,20 @@ describe('MediaRecovery', () => {
     expect(r.next()).toBe('recover');
   });
 });
+
+describe('PlaybackSession onInfo', () => {
+  it('nhận PlayInfo lần đầu và sau mỗi lần làm mới, trước load', async () => {
+    const order: string[] = [];
+    let n = 0;
+    const session = new PlaybackSession({
+      fetchPlay: async () => play(++n),
+      onInfo: (p) => order.push(`info:${p.url}`),
+      load: (url) => order.push(`load:${url}`),
+      onFatal: vi.fn(),
+      currentTime: () => 0,
+    });
+    await session.start();
+    await session.refresh();
+    expect(order).toEqual([`info:${play(1).url}`, `load:${play(1).url}`, `info:${play(2).url}`, `load:${play(2).url}`]);
+  });
+});

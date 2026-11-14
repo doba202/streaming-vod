@@ -257,6 +257,49 @@ img.poster {
   border-radius: var(--radius);
 }
 
+/* Thanh tua phụ có ảnh xem trước (SeekPreview). */
+.scrub {
+  position: relative;
+  height: 10px;
+  margin-top: 0.5rem;
+  background: var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.scrub:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.scrub-played {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 5px;
+  pointer-events: none;
+}
+
+.scrub-preview {
+  position: absolute;
+  bottom: 16px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 4px;
+  background: rgb(0 0 0 / 0.85);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.scrub-thumb {
+  background-repeat: no-repeat;
+  border-radius: 4px;
+}
+
 .quality {
   display: inline-flex;
   gap: 0.5rem;
