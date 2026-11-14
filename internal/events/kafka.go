@@ -32,10 +32,20 @@ func (p *Producer) Publish(ctx context.Context, topic string, ev Event) error {
 	if err != nil {
 		return err
 	}
-	if err := p.cl.ProduceSync(ctx, rec).FirstErr(); err != nil {
-		return fmt.Errorf("publish %s: %w", topic, err)
+	// ProduceSync không trả về theo ctx/RecordDeliveryTimeout khi broker đã chết sau khi client
+	// đã "ấm" (franz-go chỉ áp timeout khi an toàn với idempotent write), nên tự chờ theo ctx.
+	// Nếu ctx hết hạn trước, record có thể vẫn được gửi sau đó: consumer idempotent nên chấp nhận.
+	done := make(chan error, 1)
+	p.cl.Produce(ctx, rec, func(_ *kgo.Record, err error) { done <- err })
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("publish %s: %w", topic, err)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("publish %s: %w", topic, ctx.Err())
 	}
-	return nil
 }
 
 func (p *Producer) Close() { p.cl.Close() }
