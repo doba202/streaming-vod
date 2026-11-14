@@ -13,30 +13,36 @@
 | `make e2e-m4` | E2E: SPA và fallback route qua nginx, `/api/` cùng origin (cookie), upload video tiêu đề tiếng Việt, tìm không dấu / có dấu / gõ sai / lọc thể loại, `/play` cùng origin |
 | `make e2e-m5` | E2E: poster/sprite, phụ đề, sự kiện xem → "Xem tiếp", `playback.events` trong Kafka (`KAFKA_DOWN=1`: thử Kafka chết) |
 | `make e2e-m6` | E2E: sự kiện xem và log api/transcoder vào ClickHouse, record hỏng bị bỏ qua, SQL mẫu có kết quả (`CH_DOWN=1`: dừng ClickHouse, analytics thử lại, không mất sự kiện) |
+| `make e2e-m7` | E2E: header bảo mật nginx, preflight CORS của MinIO (origin SPA được phép, origin lạ bị chặn), upload như trình duyệt, `DELETE` (đang xử lý → 409, uploading/ready/failed → 204, HLS bị xoá), `PATCH` → tìm kiếm thấy tiêu đề mới, file chỉ có tiếng → `failed` → retry, viewer → 403 |
+| `make e2e` | Chạy lần lượt `e2e-m3` (gồm `e2e-m2`), `e2e-m4`, `e2e-m5`, `e2e-m6`, `e2e-m7`, in bảng tổng kết (PASS/FAIL, thời gian), log từng kịch bản ở `tmp/e2e-logs/`; `ONLY="m4 m7"` để chạy một phần. Mất khoảng 3 phút |
+| `make test-all` | `go test ./...` (cần Docker cho integration test) rồi Vitest của web (tự `npm ci` nếu chưa có `node_modules`) |
 | `make analytics-sql [Q=tên]` | Chạy SQL mẫu `scripts/analytics/*.sql` trên ClickHouse (mặc định tất cả) |
+| `make test` / `make test-short` | `go test ./...` (gồm integration test bằng testcontainers, cần Docker và FFmpeg) / chỉ unit test |
 | `make web-install` / `make web-test` / `make web-build` | `npm ci` / Vitest / build production cho `web/app` (cần Node 20.19+) |
 | `make web-dev` | Vite dev server http://localhost:5173 (hot reload), proxy `/api` và `/cdn` sang nginx `:8088` (cần `make up`) |
 | `make sign-url ID=…` | In URL CDN đã ký (2 giờ) cho video `ID` (dòng đầu là URL, dòng sau là thời điểm hết hạn), dùng với dev player hoặc video từ `make transcode` |
-| `make sample` | Sinh `tmp/sample.mp4` |
+| `make sample` | Sinh `tmp/sample.mp4` (30 giây 1080p có tiếng) |
+| `make env` | Tạo `.env` từ `.env.example`, hoặc thêm khoá mới còn thiếu (không ghi đè giá trị cũ); `make up` tự chạy |
 | `make build` | Build `bin/api`, `bin/transcoder`, `bin/analytics` |
 | `make run-api` / `make run-worker` / `make run-analytics` | Chạy api / worker / analytics trên host để dev (dừng service cùng tên trong compose trước: `docker compose -f deploy/docker-compose.yml --env-file .env stop api transcoder analytics`) |
 | `make transcode FILE=… ID=…` | Transcode một file không qua Kafka (chế độ M1) |
 
 `make up` chạy `up -d --build` rồi `up -d --wait` cho các service chạy lâu. Các container one-shot (`minio-init`, `kafka-init`) thoát với mã 0 nên không dùng `--wait` cho chúng. `api` có healthcheck (`/healthz`) nên `--wait` đợi tới khi healthy; `transcoder` không có healthcheck nên `--wait` chỉ đợi container chạy. `api` tự chạy migration khi khởi động.
 
-Xoá sạch dữ liệu: `docker compose -f deploy/docker-compose.yml down -v`.
+Xoá sạch dữ liệu: `docker compose -f deploy/docker-compose.yml --env-file .env down -v` (lần `make up` sau dựng lại từ đầu: bucket, topic, migration, bảng ClickHouse đều tự tạo; chạy lại `make seed-admin`).
 
 ## Cổng và giao diện
 
 | Dịch vụ | Địa chỉ | Đăng nhập |
 |---|---|---|
 | **Web người xem** | http://localhost:8088 | admin: `ADMIN_EMAIL` / `ADMIN_PASSWORD`, hoặc tự đăng ký viewer |
+| **Trang quản trị** | http://localhost:8088/admin | chỉ admin (viewer thấy trang 403) |
 | api qua nginx | http://localhost:8088/api/… | cookie sau `POST /api/auth/login` |
 | api trực tiếp | http://localhost:8000 (`/healthz`) | như trên (dùng cho script, debug) |
 | nginx "CDN" | http://localhost:8088/cdn/s/{sig}/{exp}/hls/{id}/… | chỉ URL ký |
 | Vite dev server | http://localhost:5173 (`make web-dev`) | như web người xem |
 | Dev player | http://localhost:8088/dev/player.html?src={URL ký, đã URL-encode} | |
-| MinIO API (presigned URL) | http://localhost:9000 | bucket `hls` đọc ẩn danh trong dev ([ADR 0002](decisions/0002-dev-hls-bucket-read.md)) |
+| MinIO API (presigned URL) | http://localhost:9000 | bucket `hls` đọc ẩn danh trong dev ([ADR 0002](decisions/0002-dev-hls-bucket-read.md)); CORS chỉ cho `MINIO_CORS_ALLOW_ORIGIN` |
 | MinIO Console | http://localhost:9001 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` trong `.env` |
 | Redpanda Console (Kafka) | http://localhost:8080 | |
 | ClickHouse HTTP | http://localhost:8123 | `streamfilm` / `POSTGRES_PASSWORD` |
@@ -67,6 +73,26 @@ Xoá sạch dữ liệu: `docker compose -f deploy/docker-compose.yml down -v`.
 | `CDN_BASE_URL` | `http://localhost:8088` | Tiền tố của URL trong `/play` |
 
 Các giá trị trong `.env.example` chỉ dành cho dev local và đã nằm trong repo: phải sinh secret và mật khẩu mới cho bất kỳ môi trường nào ngoài máy local. Đổi `CDN_SIGNING_SECRET` thì chạy lại `make up` để nginx và api cùng nhận giá trị mới; URL đã phát trước đó thành `403`.
+
+## Biến môi trường mới (M7)
+
+| Biến | Mặc định (`.env.example`) | Ý nghĩa |
+|---|---|---|
+| `MINIO_CORS_ALLOW_ORIGIN` | `http://localhost:8088,http://localhost:5173` | Origin được `PUT` part từ trình duyệt lên MinIO (compose đặt `MINIO_API_CORS_ALLOW_ORIGIN`). Phải chứa origin mở trang admin |
+
+`S3_PUBLIC_ENDPOINT` (có từ M2) giờ cũng được compose truyền cho service `api` (mặc định `http://localhost:9000`): host trong presigned URL mà trình duyệt `PUT` tới.
+
+## Trang quản trị (M7)
+
+Đăng nhập admin (`make seed-admin`) rồi mở http://localhost:8088/admin (hoặc link "Quản trị" trên header).
+
+1. **Tải video lên** → chọn file `.mp4/.mov/.mkv/.webm` (≤ 10 GB), sửa tiêu đề (gợi ý từ tên file), mô tả, thể loại (cách nhau bằng dấu phẩy), năm → **Upload**. Thanh tiến độ tính theo byte đã `PUT` lên MinIO (3 part 64 MiB cùng lúc). Mỗi part lỗi mạng/5xx được thử lại tối đa 3 lần (chờ 0,5 s rồi 1 s); lỗi 4xx khác 408/429 dừng ngay. Bấm **Huỷ upload** để dừng và xoá video dở (nếu xoá lỗi, trang báo và cho bấm "Xoá video upload dở"). Rời trang khi đang upload cũng huỷ upload nhưng không xoá: video dở bị dọn sau 24 giờ.
+2. Xong upload, trang chuyển sang chi tiết video: chip `Chờ xử lý` → `Đang xử lý` → `Sẵn sàng` (tự cập nhật mỗi 3 giây). Video 30 giây 1080p mất khoảng 20–40 giây.
+3. `Sẵn sàng` → **▶ Xem phim**. `Lỗi` → đọc lý do (`fail_reason`), sửa nguyên nhân rồi **Thử lại**.
+4. Sửa tiêu đề/mô tả/thể loại/năm → **Lưu**; tìm kiếm thấy ngay. Thêm phụ đề: mã ngôn ngữ (`vi`, `en`, `pt-BR`), nhãn, file `.srt`/`.vtt`.
+5. **Xoá** có hỏi xác nhận; không xoá được khi đang `Chờ xử lý`/`Đang xử lý`.
+
+Kiểm tra tay bằng trình duyệt (chưa có test tự động end-to-end cho UI): upload `tmp/sample.mp4` qua trang, theo dõi tab Network: `POST /api/admin/videos` → các `OPTIONS` + `PUT` tới `localhost:9000` trả `200` → `POST …/complete` → poll `GET /api/admin/videos/{id}`.
 
 ## Phát triển web (M4)
 
@@ -115,7 +141,7 @@ SQL mẫu (`scripts/analytics/`, mỗi file một câu, dòng đầu là mô t�
 | File | Câu hỏi |
 |---|---|
 | `top_videos.sql` | Top 10 phim theo lượt play, kèm số người xem khác nhau |
-| `completion_rate.sql` | Tỉ lệ xem hết = người có `ended` / người có `play`, theo phim |
+| `completion_rate.sql` | Tỉ lệ xem hết = người có cả `play` và `ended` / người có `play`, theo phim (luôn ≤ 1) |
 | `buffering_by_bitrate.sql` | Số lần, tổng và trung bình thời gian buffering theo `bitrate_kbps` |
 | `logs_by_service.sql` | Số dòng log theo service và level trong 24 giờ |
 
@@ -167,6 +193,10 @@ Lần đầu `MISS`, các lần sau `HIT`.
 | Triệu chứng | Cách xử lý |
 |---|---|
 | `make up` treo ở kafka | Xem `make logs`; xoá volume `kafkadata` nếu đổi cấu hình listener |
+| Trang admin báo "Upload lỗi: part 1: lỗi mạng (kiểm tra CORS của MinIO và cổng 9000)" | Preflight bị chặn: origin đang mở (ví dụ `http://127.0.0.1:8088` thay vì `localhost`) không nằm trong `MINIO_CORS_ALLOW_ORIGIN`; thêm vào `.env` rồi `make up`. Kiểm tra: `curl -si -X OPTIONS http://localhost:9000/raw/x -H 'Origin: http://localhost:8088' -H 'Access-Control-Request-Method: PUT' \| grep -i access-control-allow-origin` |
+| Trang admin báo "Link upload đã hết hạn hoặc không hợp lệ, hãy tạo lại" (HTTP 403 từ MinIO; 413 báo "Phần upload quá lớn") | Presigned URL hết hạn (1 giờ) hoặc ký cho host khác (`S3_PUBLIC_ENDPOINT`): xoá video dở, upload lại |
+| `/admin` hiện "403 — Không có quyền" | Đang đăng nhập bằng viewer: đăng xuất, đăng nhập admin |
+| `DELETE` trả `409 video is being processed` | Video `queued`/`processing`: đợi `ready`/`failed`. Kẹt `queued` lâu (transcoder chết, message mất): kiểm tra `make logs-app`; xoá tay `psql -U streamfilm -c "update videos set status='failed', fail_reason='manual' where id='…'"` rồi xoá qua trang |
 | `/complete` trả `503` | Kafka chưa sẵn sàng: `make ps`, đợi kafka healthy rồi gọi lại `/complete` |
 | `/complete` trả `400 multipart upload incomplete` | Chưa `PUT` đủ part, part sai kích thước, tổng byte khác `size_bytes`, hoặc URL đã hết hạn (1 giờ): upload lại part đúng rồi gọi lại, hoặc tạo video mới |
 | `PUT` presigned URL trả `403 SignatureDoesNotMatch` | URL được ký cho host khác host đang gọi; kiểm tra `S3_PUBLIC_ENDPOINT` |
@@ -188,6 +218,7 @@ Lần đầu `MISS`, các lần sau `HIT`.
 | `playback_events` / `app_logs` không có row mới | `make ps` (analytics chạy chưa?), `make logs-app` tìm `clickhouse insert failed`; Redpanda Console → Consumer Groups `analytics-*` xem lag |
 | Log analytics có `skip invalid record` | Record trong topic không đúng schema (JSON hỏng, id không phải UUID): đã bỏ qua và commit, không cần xử lý; `make e2e-m6` cố ý ghi một record như vậy |
 | Video kẹt ở `queued` | `transcoder` không chạy hoặc lag: `make ps`, `make logs-app`, tab Consumer Groups |
-| Video `failed` | Xem `fail_reason` qua `GET /api/admin/videos?status=failed` và message trong DLQ |
+| Video `failed` | Xem `fail_reason` trên trang `/admin` (hoặc `GET /api/admin/videos?status=failed`) và message trong DLQ; "Thử lại" sau khi sửa nguyên nhân |
+| `make e2e` báo FAIL ở một kịch bản | Mở `tmp/e2e-logs/e2e-mN.log` (dòng `FAIL: …` cuối); chạy lại riêng `make e2e ONLY=mN` |
 | `make run-api` báo cổng 8000 đã dùng | Dừng service `api` trong compose trước |
 | Integration test bị skip | Bật Docker Desktop; kiểm tra `ffmpeg` trong `PATH`; không dùng `-short` |

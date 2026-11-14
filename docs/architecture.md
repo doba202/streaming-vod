@@ -6,8 +6,8 @@ Modular monolith + worker qua Kafka: `api`, `transcoder`, `analytics` (M6). Vide
 
 ```mermaid
 flowchart LR
-  Admin[Admin / script e2e] -->|metadata, complete| API[api]
-  Admin -->|presigned PUT từng part| S3[(MinIO)]
+  Admin["Admin: trang /admin (SPA) / script e2e"] -->|"metadata, complete, retry, PATCH, DELETE (qua nginx)"| API[api]
+  Admin -->|"presigned PUT từng part (CORS)"| S3[(MinIO)]
   API --> PG[(Postgres)]
   API -->|video.uploaded| K{{Kafka}}
   K --> T[transcoder worker]
@@ -23,14 +23,14 @@ flowchart LR
   AN -->|"INSERT theo lô (HTTP 8123)"| CH[(ClickHouse)]
 ```
 
-Phần đã chạy tới M6: `api` (đăng ký/đăng nhập, catalog, tìm kiếm không dấu, `/play` kèm phụ đề / thumbnails / `resume_at`, hàng "Xem tiếp", nhận sự kiện xem, upload video và phụ đề cho admin, consumer trạng thái, job dọn upload bỏ dở), `transcoder worker` (HLS + poster + sprite), `analytics` (`playback.events` và `app.logs` → ClickHouse), Postgres, Kafka, MinIO, ClickHouse, nginx (cổng vào duy nhất: SPA, proxy API, CDN ký URL), web người xem `web/app`. Chưa có: trang admin (M7).
+MVP hoàn chỉnh (M7): `api` (đăng ký/đăng nhập, catalog, tìm kiếm không dấu, `/play` kèm phụ đề / thumbnails / `resume_at`, hàng "Xem tiếp", nhận sự kiện xem, upload/sửa/xoá video và phụ đề cho admin, consumer trạng thái, job dọn upload bỏ dở), `transcoder worker` (HLS + poster + sprite), `analytics` (`playback.events` và `app.logs` → ClickHouse), Postgres, Kafka, MinIO, ClickHouse, nginx (cổng vào duy nhất: SPA, proxy API, CDN ký URL, header bảo mật), web `web/app` cho người xem và trang quản trị `/admin`. Các giới hạn chấp nhận: [known-limitations](known-limitations.md).
 
 ## api
 
-| Module | Trách nhiệm (tới M4) |
+| Module | Trách nhiệm |
 |---|---|
-| `internal/upload` | `POST /api/admin/videos` (tạo video, mở multipart upload, trả presigned URL), `/complete`, `/retry`; job dọn upload bỏ dở quá 24 giờ |
-| `internal/catalog` | Repository `videos` / `renditions`, máy trạng thái, `GET /api/admin/videos[/{id}]`, `GET /api/videos[/{id}]` (tìm kiếm `q`, lọc `genre`/`year`), `GET /api/genres` và `/play` cho người xem (chỉ video `ready`), consumer `video.processing` / `video.transcoded` / `video.failed` (group `api`) |
+| `internal/upload` | `POST /api/admin/videos` (tạo video, mở multipart upload, trả presigned URL), `/complete`, `/retry`, `DELETE /api/admin/videos/{id}` (xoá dòng rồi dọn `raw/`, `hls/`, [ADR 0020](decisions/0020-video-delete-and-edit.md)); job dọn upload bỏ dở quá 24 giờ |
+| `internal/catalog` | Repository `videos` / `renditions` / `subtitles`, máy trạng thái, `NormalizeMetadata` (giới hạn metadata dùng chung cho tạo và sửa), `GET /api/admin/videos[/{id}]`, `PATCH /api/admin/videos/{id}`, `GET /api/videos[/{id}]` (tìm kiếm `q`, lọc `genre`/`year`), `GET /api/genres` và `/play` cho người xem (chỉ video `ready`), consumer `video.processing` / `video.transcoded` / `video.failed` (group `api`) |
 | `internal/auth` | Bảng `users`, bcrypt, JWT HS256 trong cookie `sf_session`, `/api/auth/register|login|logout`, `/api/me`, middleware `Authenticate` / `RequireUser` / `RequireAdmin`, lệnh `api seed-admin` |
 | `internal/signing` | Ký đường dẫn `/cdn/s/{sig}/{exp}/hls/{id}/…` đúng công thức `secure_link_md5` của nginx; từ chối tên file không an toàn (rỗng, bắt đầu bằng `/`, chứa `..`, `?`, `#`, `\` hoặc khoảng trắng) |
 | `internal/playback` | `POST /api/playback/events`: kiểm tra sự kiện, upsert `watch_progress` (heartbeat/pause/ended), publish `playback.events` qua `BestEffort` (nền, giới hạn 256 publish đang chờ, timeout 2 giây, lỗi thì log và bỏ); `Repo` đọc tiến độ cho `resume_at` và "Xem tiếp" ([ADR 0015](decisions/0015-playback-events-best-effort.md)) |
@@ -77,6 +77,18 @@ Chế độ `transcoder file -in … -id …` của M1 vẫn dùng được đ�
 nginx là cổng vào duy nhất ở http://localhost:8088 ([ADR 0011](decisions/0011-same-origin-nginx-gateway.md)): `/` phục vụ bản build của SPA (route không phải file → `index.html`), `/api/` proxy nguyên URI tới `api:8000`, `/cdn/` là CDN ký URL. Cùng origin nên cookie `sf_session` (HttpOnly) tự đi kèm mọi `fetch`, không cần CORS. Image `streamfilm-nginx:dev` build SPA trong Docker (`deploy/docker/nginx.Dockerfile`).
 
 Player: gọi `/play`, nạp URL ký vào hls.js. Lỗi `403` (URL hết hạn hoặc sai) hay lỗi mạng fatal → `PlaybackSession.refresh()` gọi lại `/play` và phát tiếp từ `currentTime`; nhiều lỗi cùng lúc chỉ gọi `/play` một lần, quá 3 lần trong 60 giây thì báo lỗi (`web/app/src/player/recovery.ts`). Lỗi media fatal → `hls.recoverMediaError()` (lần 2 gọi thêm `swapAudioCodec()`, lần 3 báo lỗi; đếm lại khi phát tiến triển). Route tải lazy được bọc `ErrorBoundary` để chunk cũ sau khi deploy hiện nút "Tải lại" thay vì trang trắng.
+
+## Trang quản trị (M7)
+
+Route `/admin` của cùng SPA, tải lazy (người xem không tải code admin), bọc `RequireAdmin`: viewer thấy trang 403 (API cũng trả `403`), header chỉ hiện link "Quản trị" cho admin.
+
+| Trang | Việc |
+|---|---|
+| `/admin` | Mọi video (tối đa 200, mới nhất trước): chip trạng thái `uploading`/`queued`/`processing`/`ready`/`failed`, `fail_reason`, dung lượng; nút "Thử lại" (failed) và "Xoá" (trừ queued/processing). Poll 3 giây khi còn video `queued`/`processing` |
+| `/admin/upload` | Chọn file + metadata → `POST /api/admin/videos` → `PUT` các part song song (3) thẳng lên MinIO với thanh tiến độ → `/complete` → sang trang chi tiết ([ADR 0019](decisions/0019-admin-browser-upload.md)) |
+| `/admin/videos/{id}` | Trạng thái (poll khi đang xử lý), lý do lỗi + thử lại, sửa metadata (`PATCH`), danh sách và upload phụ đề, xoá, link xem khi `ready` |
+
+nginx gắn `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`, `Referrer-Policy: same-origin` cho mọi phản hồi (`deploy/nginx/snippets/security-headers.conf`, include ở cấp server và trong từng location có `add_header` riêng vì nginx không kế thừa `add_header` khi location tự khai báo).
 
 ## Ảnh xem trước, phụ đề và xem tiếp (M5)
 
@@ -128,5 +140,5 @@ hls/{id}/subs/{lang}.vtt               (M5, phụ đề do admin upload, ghi đ�
 | CDN + token auth | nginx `secure_link_md5` + `proxy_cache`, URL ký theo prefix `/hls/{id}/`, hạn 2 giờ |
 | User/Auth service | module `auth` trong `api` (bcrypt, JWT trong cookie HttpOnly) |
 | Search | Postgres full-text + `unaccent` + `pg_trgm` trong module `catalog` |
-| Client apps (web) | SPA React + hls.js phục vụ bởi nginx cùng origin với API |
+| Client apps (web) | SPA React + hls.js phục vụ bởi nginx cùng origin với API; trang quản trị `/admin` trong cùng SPA |
 | Analytics / logging | `analytics` consume `playback.events` + `app.logs`, ghi lô vào ClickHouse |
