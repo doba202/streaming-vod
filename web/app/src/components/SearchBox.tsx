@@ -21,6 +21,16 @@ export function SearchBox({ initial = '', delay = 300, onSearch }: SearchBoxProp
     onSearchRef.current(q);
   };
 
+  // Đồng bộ khi `initial` đổi từ bên ngoài (nút Back/Forward đổi URL). Đặt lastEmitted trước để
+  // giá trị vừa nạp không bị coi là lần gõ mới và gọi lại onSearch.
+  useEffect(() => {
+    const q = initial.trim();
+    if (q !== lastEmitted.current) {
+      lastEmitted.current = q;
+      setValue(initial);
+    }
+  }, [initial]);
+
   useEffect(() => {
     const t = setTimeout(() => emit(value), delay);
     return () => clearTimeout(t);

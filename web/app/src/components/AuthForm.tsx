@@ -20,7 +20,7 @@ export function validateCredentials(c: Credentials): CredentialErrors {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.email.trim())) errors.email = 'Email không hợp lệ.';
   const bytes = new TextEncoder().encode(c.password).length;
   if (bytes < MIN_PASSWORD_BYTES || bytes > MAX_PASSWORD_BYTES) {
-    errors.password = `Mật khẩu cần ${MIN_PASSWORD_BYTES}–${MAX_PASSWORD_BYTES} ký tự.`;
+    errors.password = `Mật khẩu cần ${MIN_PASSWORD_BYTES}–${MAX_PASSWORD_BYTES} byte (ký tự có dấu tính nhiều byte).`;
   }
   return errors;
 }
@@ -39,9 +39,10 @@ export interface AuthFormProps {
   submitLabel: string;
   onSubmit: (c: Credentials) => Promise<void>;
   footer?: ReactNode;
+  mode?: 'login' | 'register'; // register: trình duyệt gợi ý mật khẩu mới thay vì điền mật khẩu cũ
 }
 
-export function AuthForm({ title, submitLabel, onSubmit, footer }: AuthFormProps) {
+export function AuthForm({ title, submitLabel, onSubmit, footer, mode = 'login' }: AuthFormProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errors, setErrors] = useState<CredentialErrors>({});
@@ -76,7 +77,7 @@ export function AuthForm({ title, submitLabel, onSubmit, footer }: AuthFormProps
       {errors.email && <p className="field-error">{errors.email}</p>}
       <label>
         Mật khẩu
-        <input type="password" autoComplete="current-password" value={password}
+        <input type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={password}
           onChange={(e) => setPassword(e.target.value)} aria-invalid={Boolean(errors.password)} />
       </label>
       {errors.password && <p className="field-error">{errors.password}</p>}

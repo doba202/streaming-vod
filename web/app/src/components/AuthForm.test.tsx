@@ -26,7 +26,7 @@ describe('AuthForm', () => {
     render(<AuthForm title="Đăng nhập" submitLabel="Đăng nhập" onSubmit={onSubmit} />);
     fill('abc', '123');
     expect(screen.getByText('Email không hợp lệ.')).toBeInTheDocument();
-    expect(screen.getByText('Mật khẩu cần 8–72 ký tự.')).toBeInTheDocument();
+    expect(screen.getByText('Mật khẩu cần 8–72 byte (ký tự có dấu tính nhiều byte).')).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
@@ -44,5 +44,15 @@ describe('AuthForm', () => {
     render(<AuthForm title="Đăng nhập" submitLabel="Đăng nhập" onSubmit={onSubmit} />);
     fill('viewer@example.com', 'wrong-password');
     expect(await screen.findByRole('alert')).toHaveTextContent('Email hoặc mật khẩu không đúng.');
+  });
+});
+
+describe('AuthForm autocomplete', () => {
+  it('đăng nhập dùng current-password, đăng ký dùng new-password', () => {
+    const { unmount } = render(<AuthForm title="Đăng nhập" submitLabel="Đăng nhập" onSubmit={vi.fn()} />);
+    expect(screen.getByLabelText('Mật khẩu')).toHaveAttribute('autocomplete', 'current-password');
+    unmount();
+    render(<AuthForm title="Tạo tài khoản" submitLabel="Đăng ký" mode="register" onSubmit={vi.fn()} />);
+    expect(screen.getByLabelText('Mật khẩu')).toHaveAttribute('autocomplete', 'new-password');
   });
 });

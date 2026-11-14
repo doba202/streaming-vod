@@ -47,4 +47,15 @@ describe('SearchBox', () => {
     });
     expect(onSearch).toHaveBeenCalledTimes(1);
   });
+
+  it('cập nhật ô nhập khi initial đổi (Back/Forward) mà không gọi onSearch', () => {
+    const onSearch = vi.fn();
+    const { rerender } = render(<SearchBox initial="a" onSearch={onSearch} />);
+    rerender(<SearchBox initial="trò chơi" onSearch={onSearch} />);
+    expect(screen.getByRole('searchbox', { name: 'Tìm phim' })).toHaveValue('trò chơi');
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(onSearch).not.toHaveBeenCalled();
+  });
 });
