@@ -25,6 +25,7 @@ func (emptyStore) Get(context.Context, string) (catalog.Video, error) {
 	return catalog.Video{}, catalog.ErrNotFound
 }
 func (emptyStore) Renditions(context.Context, string) ([]catalog.Rendition, error) { return nil, nil }
+func (emptyStore) Subtitles(context.Context, string) ([]catalog.Subtitle, error)   { return nil, nil }
 
 // TestRouterAuthz kiểm tra phân quyền theo nhóm route; handler phía sau dùng store rỗng.
 func TestRouterAuthz(t *testing.T) {

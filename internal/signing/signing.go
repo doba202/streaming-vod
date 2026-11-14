@@ -23,6 +23,10 @@ import (
 // TTL của URL phát (spec §4.3).
 const TTL = 2 * time.Hour
 
+// StableStep: StablePath làm tròn exp xuống bội số của bước này, nên URL ảnh (poster) giống hệt nhau
+// trong suốt một giờ và trình duyệt cache được (URL ký với exp theo giây đổi ở mỗi lần gọi API).
+const StableStep = time.Hour
+
 // secretRe: chỉ ký tự an toàn khi chèn vào chuỗi trong cấu hình nginx (không có dấu cách, ", $, ;).
 var secretRe = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
 
@@ -65,15 +69,25 @@ func NewSigner(secret string, ttl time.Duration, now func() time.Time) (*Signer,
 	return &Signer{secret: secret, ttl: ttl, now: now}, nil
 }
 
-// Path ký file trong thư mục HLS của video; trả path và thời điểm hết hạn.
+// Path ký file trong thư mục HLS của video; trả path và thời điểm hết hạn (now + TTL).
 func (s *Signer) Path(videoID, file string) (string, time.Time, error) {
+	return s.sign(videoID, file, s.now().Add(s.ttl).Unix())
+}
+
+// StablePath như Path nhưng exp = now + TTL làm tròn xuống bội số StableStep (Unix giây): hạn còn lại
+// nằm trong (TTL − StableStep, TTL], không bao giờ dài hơn TTL. Dùng cho ảnh poster trong catalog.
+func (s *Signer) StablePath(videoID, file string) (string, time.Time, error) {
+	step := int64(StableStep / time.Second)
+	return s.sign(videoID, file, s.now().Add(s.ttl).Unix()/step*step)
+}
+
+func (s *Signer) sign(videoID, file string, exp int64) (string, time.Time, error) {
 	if !videoIDRe.MatchString(videoID) {
 		return "", time.Time{}, fmt.Errorf("invalid video id %q", videoID)
 	}
 	if err := validateFile(file); err != nil {
 		return "", time.Time{}, err
 	}
-	exp := s.now().Add(s.ttl).Unix()
 	return SignedPath(s.secret, videoID, file, exp), time.Unix(exp, 0).UTC(), nil
 }
 

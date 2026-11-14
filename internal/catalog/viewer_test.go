@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 type fakeViewerStore struct {
 	videos      []Video // thứ tự = thứ tự catalog
 	genres      []string
+	subs        map[string][]Subtitle
 	last        SearchParams
 	limit, offs int
 }
@@ -51,10 +53,18 @@ func (f *fakeViewerStore) Renditions(context.Context, string) ([]Rendition, erro
 	return []Rendition{{Height: 720, BitrateKbps: 2800, PlaylistKey: idA + "/720p/index.m3u8"}}, nil
 }
 
+func (f *fakeViewerStore) Subtitles(_ context.Context, id string) ([]Subtitle, error) {
+	return f.subs[id], nil
+}
+
 type fakeSigner struct{ exp time.Time }
 
 func (s fakeSigner) Path(id, file string) (string, time.Time, error) {
 	return "/cdn/s/SIG/" + fmt.Sprint(s.exp.Unix()) + "/hls/" + id + "/" + file, s.exp, nil
+}
+
+func (s fakeSigner) StablePath(id, file string) (string, time.Time, error) {
+	return "/cdn/s/STABLE/" + fmt.Sprint(s.exp.Unix()) + "/hls/" + id + "/" + file, s.exp, nil
 }
 
 func newViewerRouter(store ViewerStore) http.Handler {
@@ -188,5 +198,54 @@ func TestViewerGenres(t *testing.T) {
 	rec = get(newViewerRouter(&fakeViewerStore{genres: []string{"Gia đình", "Hành động"}}), "/api/genres")
 	if strings.TrimSpace(rec.Body.String()) != `{"genres":["Gia đình","Hành động"]}` {
 		t.Errorf("genres: %s", rec.Body)
+	}
+}
+
+func TestViewerPosterAndPlayExtras(t *testing.T) {
+	store := &fakeViewerStore{
+		videos: []Video{
+			{ID: idA, Title: "A", Status: StatusReady, DurationS: 30,
+				PosterKey: idA + "/poster.jpg", SpriteKey: idA + "/thumbnails.vtt"},
+			{ID: idC, Title: "C (trước M5)", Status: StatusReady, DurationS: 30},
+		},
+		subs: map[string][]Subtitle{idA: {
+			{Lang: "en", Label: "English", VTTKey: idA + "/subs/en.vtt"},
+			{Lang: "vi", Label: "Tiếng Việt", VTTKey: idA + "/subs/vi.vtt"},
+			{Lang: "xx", Label: "Hỏng", VTTKey: idB + "/subs/xx.vtt"}, // key ngoài thư mục video: bỏ qua
+		}},
+	}
+	h := newViewerRouter(store)
+	const base = "http://cdn.test/cdn/s/"
+
+	var list struct {
+		Videos []ViewerVideoJSON `json:"videos"`
+	}
+	json.Unmarshal(get(h, "/api/videos").Body.Bytes(), &list)
+	if len(list.Videos) != 2 || list.Videos[0].PosterURL != base+"STABLE/1794736800/hls/"+idA+"/poster.jpg" ||
+		list.Videos[1].PosterURL != "" {
+		t.Errorf("list posters = %+v", list.Videos)
+	}
+	if rec := get(h, "/api/videos/"+idC); strings.Contains(rec.Body.String(), "poster_url") {
+		t.Errorf("video không có poster thì bỏ poster_url: %s", rec.Body)
+	}
+	var detail ViewerVideoJSON
+	json.Unmarshal(get(h, "/api/videos/"+idA).Body.Bytes(), &detail)
+	if detail.PosterURL != base+"STABLE/1794736800/hls/"+idA+"/poster.jpg" {
+		t.Errorf("detail poster = %q", detail.PosterURL)
+	}
+
+	var p PlayJSON
+	json.Unmarshal(get(h, "/api/videos/"+idA+"/play").Body.Bytes(), &p)
+	sig := base + "SIG/1794736800/hls/" + idA + "/"
+	wantSubs := []SubtitleJSON{
+		{Lang: "en", Label: "English", URL: sig + "subs/en.vtt"},
+		{Lang: "vi", Label: "Tiếng Việt", URL: sig + "subs/vi.vtt"},
+	}
+	if p.ThumbnailsURL != sig+"thumbnails.vtt" || !reflect.DeepEqual(p.Subtitles, wantSubs) {
+		t.Errorf("play = %+v", p)
+	}
+	rec := get(h, "/api/videos/"+idC+"/play")
+	if strings.Contains(rec.Body.String(), "thumbnails_url") || !strings.Contains(rec.Body.String(), `"subtitles":[]`) {
+		t.Errorf("video trước M5: %s", rec.Body)
 	}
 }

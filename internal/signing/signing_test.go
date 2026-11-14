@@ -71,6 +71,31 @@ func TestSignerPath(t *testing.T) {
 	}
 }
 
+func TestSignerStablePath(t *testing.T) {
+	// testExp là đúng một mốc giờ. now + TTL rơi vào [testExp, testExp+1h) → exp = testExp.
+	for _, offset := range []time.Duration{0, time.Second, 30 * time.Minute, time.Hour - time.Second} {
+		now := time.Unix(testExp, 0).Add(-TTL + offset)
+		s, err := NewSigner(testSecret, TTL, func() time.Time { return now })
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, exp, err := s.StablePath(testVID, "poster.jpg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if exp.Unix() != testExp || p != SignedPath(testSecret, testVID, "poster.jpg", testExp) {
+			t.Errorf("offset %v: exp = %v, path = %q", offset, exp, p)
+		}
+		if left := exp.Sub(now); left > TTL || left <= TTL-StableStep {
+			t.Errorf("offset %v: còn hạn %v, want trong (1h, 2h]", offset, left)
+		}
+	}
+	s, _ := NewSigner(testSecret, TTL, time.Now)
+	if _, _, err := s.StablePath(testVID, "../x.jpg"); err == nil {
+		t.Error("StablePath phải kiểm tra file như Path")
+	}
+}
+
 func TestValidateSecret(t *testing.T) {
 	if _, err := NewSigner("short", TTL, time.Now); err == nil {
 		t.Error("short secret: want error")

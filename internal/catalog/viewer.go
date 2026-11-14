@@ -23,11 +23,14 @@ type ViewerStore interface {
 	Genres(ctx context.Context) ([]string, error)
 	Get(ctx context.Context, id string) (Video, error)
 	Renditions(ctx context.Context, id string) ([]Rendition, error)
+	Subtitles(ctx context.Context, videoID string) ([]Subtitle, error)
 }
 
-// PlaySigner ký đường dẫn HLS (signing.Signer).
+// PlaySigner ký đường dẫn trong thư mục hls/{id}/ (signing.Signer). StablePath cho ảnh poster
+// (URL ổn định trong một giờ để trình duyệt cache), Path cho mọi thứ khác.
 type PlaySigner interface {
 	Path(videoID, file string) (string, time.Time, error)
+	StablePath(videoID, file string) (string, time.Time, error)
 }
 
 // ViewerHandler: catalog và /play cho user đã đăng nhập (router bọc auth.RequireUser).
@@ -70,6 +73,7 @@ type ViewerVideoJSON struct {
 	Year        int                   `json:"year,omitempty"`
 	DurationS   int                   `json:"duration_s"`
 	CreatedAt   time.Time             `json:"created_at"`
+	PosterURL   string                `json:"poster_url,omitempty"` // URL ký; không có với video trước M5
 	Renditions  []ViewerRenditionJSON `json:"renditions,omitempty"`
 }
 
@@ -79,12 +83,14 @@ type SubtitleJSON struct {
 	URL   string `json:"url"`
 }
 
-// PlayJSON: subtitles luôn là [] và resume_at luôn 0 tới M5 (giữ nguyên hình dạng cho web M4).
+// PlayJSON (spec §4.3): mọi URL cùng prefix ký /cdn/s/{sig}/{exp}/hls/{id}/. subtitles luôn là mảng
+// ([] khi không có); thumbnails_url bỏ khi video chưa có sprite (transcode trước M5).
 type PlayJSON struct {
-	URL       string         `json:"url"`
-	ExpiresAt time.Time      `json:"expires_at"`
-	Subtitles []SubtitleJSON `json:"subtitles"`
-	ResumeAt  int            `json:"resume_at"`
+	URL           string         `json:"url"`
+	ExpiresAt     time.Time      `json:"expires_at"`
+	Subtitles     []SubtitleJSON `json:"subtitles"`
+	ThumbnailsURL string         `json:"thumbnails_url,omitempty"`
+	ResumeAt      int            `json:"resume_at"`
 }
 
 func toViewerJSON(v Video) ViewerVideoJSON {
@@ -94,6 +100,25 @@ func toViewerJSON(v Video) ViewerVideoJSON {
 	}
 	return ViewerVideoJSON{ID: v.ID, Title: v.Title, Description: v.Description, Genres: genres,
 		Year: v.Year, DurationS: v.DurationS, CreatedAt: v.CreatedAt}
+}
+
+// fileInDir: key "{id}/poster.jpg" → "poster.jpg". Key không nằm trong thư mục của video → false.
+func fileInDir(videoID, key string) (string, bool) {
+	f, ok := strings.CutPrefix(key, videoID+"/")
+	return f, ok && f != ""
+}
+
+// toViewer: toViewerJSON + poster_url đã ký. Ký lỗi thì bỏ poster (web hiện ảnh tạm), không lỗi cả trang.
+func (h *ViewerHandler) toViewer(v Video) ViewerVideoJSON {
+	out := toViewerJSON(v)
+	if f, ok := fileInDir(v.ID, v.PosterKey); ok {
+		if p, _, err := h.Signer.StablePath(v.ID, f); err == nil {
+			out.PosterURL = h.CDNBaseURL + p
+		} else {
+			h.Log.Warn("sign poster url", "video_id", v.ID, "err", err)
+		}
+	}
+	return out
 }
 
 // list: GET /api/videos?q=&genre=&year=&page=. Không có q thì duyệt catalog (mới nhất trước);
@@ -146,7 +171,7 @@ func (h *ViewerHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]ViewerVideoJSON, 0, len(vs))
 	for _, v := range vs {
-		out = append(out, toViewerJSON(v))
+		out = append(out, h.toViewer(v))
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"videos": out, "page": page, "has_more": hasMore})
 }
@@ -196,7 +221,7 @@ func (h *ViewerHandler) get(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	out := toViewerJSON(v)
+	out := h.toViewer(v)
 	for _, rd := range rs {
 		out.Renditions = append(out.Renditions, ViewerRenditionJSON{Height: rd.Height, BitrateKbps: rd.BitrateKbps})
 	}
@@ -214,8 +239,34 @@ func (h *ViewerHandler) play(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	subs, err := h.Videos.Subtitles(r.Context(), v.ID)
+	if err != nil {
+		h.Log.Error("list subtitles", "video_id", v.ID, "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	out := PlayJSON{URL: h.CDNBaseURL + path, ExpiresAt: exp, Subtitles: make([]SubtitleJSON, 0, len(subs))}
+	for _, s := range subs {
+		if u, ok := h.signFile(v.ID, s.VTTKey); ok {
+			out.Subtitles = append(out.Subtitles, SubtitleJSON{Lang: s.Lang, Label: s.Label, URL: u})
+		}
+	}
+	out.ThumbnailsURL, _ = h.signFile(v.ID, v.SpriteKey)
 	// URL có hạn dùng riêng cho user này: không cho cache trung gian giữ lại.
 	w.Header().Set("Cache-Control", "no-store")
-	httpx.WriteJSON(w, http.StatusOK, PlayJSON{URL: h.CDNBaseURL + path, ExpiresAt: exp,
-		Subtitles: []SubtitleJSON{}, ResumeAt: 0})
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// signFile trả URL tuyệt đối đã ký cho key trong thư mục của video; key rỗng hoặc lạ → false.
+func (h *ViewerHandler) signFile(videoID, key string) (string, bool) {
+	f, ok := fileInDir(videoID, key)
+	if !ok {
+		return "", false
+	}
+	p, _, err := h.Signer.Path(videoID, f)
+	if err != nil {
+		h.Log.Warn("sign file", "video_id", videoID, "key", key, "err", err)
+		return "", false
+	}
+	return h.CDNBaseURL + p, true
 }
