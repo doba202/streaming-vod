@@ -110,6 +110,12 @@ func (h *ViewerHandler) list(w http.ResponseWriter, r *http.Request) {
 		page = n
 	}
 	p := SearchParams{Query: strings.TrimSpace(qs.Get("q")), Genre: strings.TrimSpace(qs.Get("genre"))}
+	for name, v := range map[string]string{"q": p.Query, "genre": p.Genre} {
+		if !utf8.ValidString(v) || strings.ContainsRune(v, 0) {
+			httpx.WriteError(w, http.StatusBadRequest, name+" must be valid text")
+			return
+		}
+	}
 	if utf8.RuneCountInString(p.Query) > MaxQueryLen {
 		httpx.WriteError(w, http.StatusBadRequest, fmt.Sprintf("q must be at most %d characters", MaxQueryLen))
 		return

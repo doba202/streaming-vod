@@ -169,7 +169,8 @@ func TestViewerSearchParams(t *testing.T) {
 
 	long := strings.Repeat("ă", MaxQueryLen+1)
 	for _, q := range []string{"?year=abc", "?year=1800", "?year=2101", "?q=" + long,
-		"?genre=" + strings.Repeat("g", MaxGenreLen+1)} {
+		"?genre=" + strings.Repeat("g", MaxGenreLen+1),
+		"?q=%FF", "?q=%00", "?genre=%FF", "?genre=a%00b"} {
 		if rec := get(h, "/api/videos"+q); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: code = %d, want 400", q, rec.Code)
 		}
