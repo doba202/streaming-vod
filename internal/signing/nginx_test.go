@@ -73,6 +73,9 @@ func TestNginxSecureLinkParity(t *testing.T) {
 		testcontainers.WithFiles(testcontainers.ContainerFile{
 			HostFilePath:      "../../deploy/nginx/templates/default.conf.template",
 			ContainerFilePath: "/etc/nginx/templates/default.conf.template", FileMode: 0o644,
+		}, testcontainers.ContainerFile{
+			HostFilePath:      "../../deploy/nginx/snippets/security-headers.conf",
+			ContainerFilePath: "/etc/nginx/snippets/security-headers.conf", FileMode: 0o644,
 		}),
 		testcontainers.WithWaitStrategy(wait.ForHTTP("/healthz").WithPort("80/tcp")),
 	)
@@ -116,6 +119,7 @@ func TestNginxSecureLinkParity(t *testing.T) {
 		{"spa root", "/", 200, ""},
 		{"spa fallback route", "/watch/" + testVID, 200, ""},
 		{"missing asset", "/assets/missing.js", 404, ""},
+		{"healthz", "/healthz", 200, "ok\n"},
 	}
 	for _, c := range cases {
 		resp, err := http.Get(endpoint + c.path)
@@ -133,6 +137,12 @@ func TestNginxSecureLinkParity(t *testing.T) {
 		}
 		if strings.HasPrefix(c.path, "/cdn/") && resp.Header.Get("Access-Control-Allow-Origin") != "*" {
 			t.Errorf("%s: thiếu CORS header (player cần đọc được mã 403)", c.name)
+		}
+		// M7: mọi location (kể cả location có add_header riêng, và phản hồi 403/404) đều có header bảo mật.
+		for h, want := range securityHeaders {
+			if got := resp.Header.Get(h); got != want {
+				t.Errorf("%s: %s = %q, want %q", c.name, h, got, want)
+			}
 		}
 	}
 
@@ -183,6 +193,14 @@ func TestNginxSecureLinkParity(t *testing.T) {
 	} else {
 		resp.Body.Close()
 	}
+}
+
+// securityHeaders khớp deploy/nginx/snippets/security-headers.conf.
+var securityHeaders = map[string]string{
+	"X-Content-Type-Options":  "nosniff",
+	"X-Frame-Options":         "DENY",
+	"Content-Security-Policy": "frame-ancestors 'none'",
+	"Referrer-Policy":         "same-origin",
 }
 
 func getBody(t *testing.T, url string) string {

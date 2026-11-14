@@ -21,6 +21,9 @@ services:
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+      # M7: trang admin PUT part thẳng từ trình duyệt (origin của SPA) lên presigned URL :9000 — cross-origin.
+      # Mặc định MinIO cho mọi origin ("*"); giới hạn lại về SPA (nginx) và Vite dev server (ADR 0019).
+      MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_CORS_ALLOW_ORIGIN:-http://localhost:8088,http://localhost:5173}
     ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
     volumes: [miniodata:/data]
     healthcheck:
@@ -112,6 +115,7 @@ services:
       NGINX_ENVSUBST_FILTER: "^CDN_"
     volumes:
       - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
       - ../web/dev:/usr/share/nginx/html/dev:ro
     depends_on:
       minio: { condition: service_healthy }
@@ -131,7 +135,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       S3_ENDPOINT: http://minio:9000
       # Presigned URL được ký cho địa chỉ mà máy host nhìn thấy (chữ ký gắn với Host).
-      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
       S3_REGION: ${S3_REGION}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
