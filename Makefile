@@ -1,7 +1,8 @@
 COMPOSE := docker compose -f deploy/docker-compose.yml --env-file .env
 
 .PHONY: env up down logs logs-app ps test test-short build sample transcode run-api run-worker run-analytics \
-	e2e-m2 e2e-m3 e2e-m4 e2e-m5 e2e-m6 seed-admin sign-url analytics-sql web-install web-dev web-test web-build
+	e2e e2e-m2 e2e-m3 e2e-m4 e2e-m5 e2e-m6 e2e-m7 test-all seed-admin sign-url analytics-sql \
+	web-install web-dev web-test web-build
 
 # Tạo .env từ .env.example; nếu .env đã có thì bổ sung các khoá mới (vd. khoá M3) mà không ghi đè giá trị cũ.
 env:
@@ -99,6 +100,23 @@ e2e-m5: seed-admin
 e2e-m6: seed-admin
 	@test -f tmp/sample.mp4 || $(MAKE) sample
 	set -a; . ./.env; set +a; COMPOSE="$(COMPOSE)" E2E_CLICKHOUSE_DOWN="$(CH_DOWN)" ./scripts/e2e-m6.sh tmp/sample.mp4
+
+# E2E M7: header bảo mật nginx, CORS MinIO cho upload từ trình duyệt, PATCH/DELETE video, failed → retry.
+e2e-m7: seed-admin
+	@test -f tmp/sample.mp4 || $(MAKE) sample
+	set -a; . ./.env; set +a; MINIO="$${S3_PUBLIC_ENDPOINT:-http://localhost:9000}" ./scripts/e2e-m7.sh tmp/sample.mp4
+
+# E2E toàn bộ MVP: e2e-m3 (gồm m2) → m4 → m5 → m6 → m7, in bảng tổng kết; log ở tmp/e2e-logs/.
+# Chạy một phần: make e2e ONLY="m4 m7".
+e2e: seed-admin
+	@test -f tmp/sample.mp4 || $(MAKE) sample
+	set -a; . ./.env; set +a; COMPOSE="$(COMPOSE)" E2E_ONLY="$(ONLY)" MINIO="$${S3_PUBLIC_ENDPOINT:-http://localhost:9000}" \
+	  ./scripts/e2e.sh tmp/sample.mp4
+
+# Toàn bộ test: Go (unit + integration bằng testcontainers, cần Docker) rồi Vitest của web.
+test-all: test
+	@test -d $(WEB)/node_modules || $(MAKE) web-install
+	$(MAKE) web-test
 
 # Web người xem (web/app, cần Node 20.19+). `make up` tự build SPA trong image nginx, không cần Node trên máy.
 WEB := web/app
