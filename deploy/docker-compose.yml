@@ -176,6 +176,25 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
 
+  # M6: playback.events + app.logs → ClickHouse theo lô (1000 record hoặc 1 giây). Tự tạo bảng khi khởi động.
+  analytics:
+    build:
+      context: ..
+      dockerfile: deploy/docker/analytics.Dockerfile
+    image: streamfilm-analytics:dev
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DB: streamfilm
+      CLICKHOUSE_USER: streamfilm
+      CLICKHOUSE_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+      clickhouse: { condition: service_healthy }
+    restart: unless-stopped
+    # Đủ cho lần ghi nốt lô đang dở khi tắt (ShutdownTimeout 10 giây).
+    stop_grace_period: 15s
+
 volumes:
   pgdata:
   miniodata:

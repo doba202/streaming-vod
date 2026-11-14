@@ -1,7 +1,7 @@
 COMPOSE := docker compose -f deploy/docker-compose.yml --env-file .env
 
-.PHONY: env up down logs logs-app ps test test-short build sample transcode run-api run-worker e2e-m2 e2e-m3 e2e-m4 e2e-m5 seed-admin sign-url \
-	web-install web-dev web-test web-build
+.PHONY: env up down logs logs-app ps test test-short build sample transcode run-api run-worker run-analytics \
+	e2e-m2 e2e-m3 e2e-m4 e2e-m5 e2e-m6 seed-admin sign-url analytics-sql web-install web-dev web-test web-build
 
 # Tạo .env từ .env.example; nếu .env đã có thì bổ sung các khoá mới (vd. khoá M3) mà không ghi đè giá trị cũ.
 env:
@@ -13,7 +13,7 @@ env:
 # Các service one-shot (minio-init, kafka-init) thoát với mã 0 nên không dùng --wait cho chúng.
 up: env
 	$(COMPOSE) up -d --build
-	$(COMPOSE) up -d --wait postgres minio kafka console clickhouse nginx api transcoder
+	$(COMPOSE) up -d --wait postgres minio kafka console clickhouse nginx api transcoder analytics
 
 down:
 	$(COMPOSE) down
@@ -22,7 +22,7 @@ logs:
 	$(COMPOSE) logs -f --tail=100
 
 logs-app:
-	$(COMPOSE) logs -f --tail=100 api transcoder nginx
+	$(COMPOSE) logs -f --tail=100 api transcoder analytics nginx
 
 ps:
 	$(COMPOSE) ps
@@ -36,6 +36,7 @@ test-short:
 build:
 	go build -o bin/api ./cmd/api
 	go build -o bin/transcoder ./cmd/transcoder
+	go build -o bin/analytics ./cmd/analytics
 
 # Sinh video mẫu 30 giây 1080p có tiếng vào tmp/sample.mp4
 sample:
@@ -55,6 +56,14 @@ run-api: env
 # Chạy transcoder worker trên host (cần FFmpeg trên máy; dừng service transcoder trong compose trước nếu đã có).
 run-worker: env
 	set -a; . ./.env; set +a; go run ./cmd/transcoder worker
+
+# Chạy analytics trên host (dừng service analytics trong compose trước nếu đã có, vì cùng consumer group).
+run-analytics: env
+	set -a; . ./.env; set +a; go run ./cmd/analytics
+
+# SQL phân tích mẫu (scripts/analytics/*.sql) trên ClickHouse: make analytics-sql [Q=top_videos]
+analytics-sql: env
+	@set -a; . ./.env; set +a; ./scripts/analytics-sql.sh $(Q)
 
 # Tạo hoặc đặt lại admin (ADMIN_EMAIL / ADMIN_PASSWORD trong .env) trong container api đang chạy.
 seed-admin: env
