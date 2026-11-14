@@ -144,6 +144,14 @@ func Transcoded(id string, res transcode.Result) events.VideoTranscoded {
 			Height: r.Height, BitrateKbps: r.VideoKbps, PlaylistKey: id + "/" + r.Name + "/index.m3u8",
 		})
 	}
+	// poster_key / sprite_key là key trong bucket hls (giống playlist_key). sprite_key trỏ tới
+	// thumbnails.vtt — chỉ mục của các tấm sprite (video dài có nhiều tấm), ADR 0013.
+	if res.PosterFile != "" {
+		out.PosterKey = id + "/" + res.PosterFile
+	}
+	if res.ThumbnailsFile != "" {
+		out.SpriteKey = id + "/" + res.ThumbnailsFile
+	}
 	return out
 }
 

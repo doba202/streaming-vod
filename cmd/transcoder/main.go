@@ -86,7 +86,8 @@ func runFile(ctx context.Context, cfg config.Config, input, id string) error {
 	for i, r := range res.Rungs {
 		rungs[i] = r.Name
 	}
-	slog.Info("transcode done", "video_id", id, "duration_s", res.Probe.DurationSec, "rungs", rungs)
+	slog.Info("transcode done", "video_id", id, "duration_s", res.Probe.DurationSec, "rungs", rungs,
+		"poster", res.PosterFile, "sprite_sheets", res.SpriteSheets)
 
 	n, err := newStore(cfg).UploadDir(ctx, cfg.BucketHLS, id, out)
 	if err != nil {

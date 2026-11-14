@@ -73,8 +73,9 @@ func (f *fakePub) topics() []string {
 }
 
 var okResult = transcode.Result{
-	Probe: transcode.ProbeResult{Width: 1280, Height: 720, DurationSec: 29.6, HasAudio: true},
-	Rungs: []transcode.Rung{transcode.DefaultLadder[1], transcode.DefaultLadder[3]},
+	Probe:      transcode.ProbeResult{Width: 1280, Height: 720, DurationSec: 29.6, HasAudio: true},
+	Rungs:      []transcode.Rung{transcode.DefaultLadder[1], transcode.DefaultLadder[3]},
+	PosterFile: transcode.PosterFile, ThumbnailsFile: transcode.ThumbnailsFile, SpriteSheets: 1,
 }
 
 type harness struct {
@@ -117,7 +118,7 @@ func TestHandleSuccess(t *testing.T) {
 	want := events.VideoTranscoded{VideoID: testVID, DurationS: 30, HLSPrefix: testVID + "/", Renditions: []events.Rendition{
 		{Height: 720, BitrateKbps: 2800, PlaylistKey: testVID + "/720p/index.m3u8"},
 		{Height: 360, BitrateKbps: 800, PlaylistKey: testVID + "/360p/index.m3u8"},
-	}}
+	}, PosterKey: testVID + "/poster.jpg", SpriteKey: testVID + "/thumbnails.vtt"}
 	if got := h.pub.got[1].ev; !reflect.DeepEqual(got, want) {
 		t.Errorf("transcoded = %+v", got)
 	}
@@ -251,5 +252,18 @@ func TestHandlePublishErrorIsReturned(t *testing.T) {
 	}
 	if h.tr.calls != 0 {
 		t.Error("transcoder must not run when processing event cannot be published")
+	}
+}
+
+func TestTranscodedWithoutThumbnails(t *testing.T) {
+	res := okResult
+	res.PosterFile, res.ThumbnailsFile = "", ""
+	ev := Transcoded(testVID, res)
+	if ev.PosterKey != "" || ev.SpriteKey != "" {
+		t.Errorf("poster_key=%q sprite_key=%q, want rỗng", ev.PosterKey, ev.SpriteKey)
+	}
+	b, _ := json.Marshal(ev)
+	if strings.Contains(string(b), "poster_key") || strings.Contains(string(b), "sprite_key") {
+		t.Errorf("key rỗng phải bị bỏ khỏi JSON: %s", b)
 	}
 }
