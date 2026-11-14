@@ -167,6 +167,19 @@ describe('uploadParts', () => {
   });
 });
 
+describe('uploadParts (huỷ sớm)', () => {
+  it('signal đã huỷ: putPart không được gọi, ném AbortError', async () => {
+    const put = vi.fn<PutPart>(async () => {});
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const err = await uploadParts(new Blob(['1234']), planFor(4, 4), { putPart: put, signal: ctrl.signal }).catch(
+      (e: unknown) => e,
+    );
+    expect((err as Error).name).toBe('AbortError');
+    expect(put).not.toHaveBeenCalled();
+  });
+});
+
 describe('uploadVideo', () => {
   it('create → PUT các part → complete, trả id', async () => {
     const order: string[] = [];
@@ -205,6 +218,34 @@ describe('uploadVideo', () => {
     );
     expect(err).toBeInstanceOf(UploadVideoError);
     expect((err as UploadVideoError).videoId).toBe('v9');
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('signal đã huỷ trước khi bắt đầu part: không PUT, ném AbortError, không complete', async () => {
+    vi.spyOn(adminApi, 'create').mockResolvedValue({ id: 'v2', status: 'uploading', upload: planFor(4, 4) });
+    const complete = vi.spyOn(adminApi, 'complete');
+    const put = vi.fn<PutPart>(async () => {});
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const err = await uploadVideo(new File(['1234'], 'a.mp4'), { title: 'A' }, { putPart: put, signal: ctrl.signal }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(UploadVideoError);
+    expect((err as UploadVideoError).videoId).toBe('v2');
+    expect((err as UploadVideoError).message).toMatch(/abort/i);
+    expect(put).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('huỷ sau khi các part xong nhưng trước complete: không gọi complete', async () => {
+    vi.spyOn(adminApi, 'create').mockResolvedValue({ id: 'v3', status: 'uploading', upload: planFor(4, 4) });
+    const complete = vi.spyOn(adminApi, 'complete');
+    const ctrl = new AbortController();
+    const put: PutPart = async () => ctrl.abort();
+    const err = await uploadVideo(new File(['1234'], 'a.mp4'), { title: 'A' }, { putPart: put, signal: ctrl.signal }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(UploadVideoError);
     expect(complete).not.toHaveBeenCalled();
   });
 });

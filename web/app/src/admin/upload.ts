@@ -100,6 +100,7 @@ export const xhrPutPart: PutPart = (url, body, onProgress, signal) =>
 // uploadParts gửi mọi part của plan, tối đa `concurrency` part cùng lúc. Một part lỗi PART_ATTEMPTS lần thì
 // huỷ các part đang gửi và ném UploadError. onProgress nhận tổng byte đã gửi (không vượt file.size).
 export async function uploadParts(file: Blob, plan: UploadPlan, opts: UploadOptions = {}): Promise<void> {
+  opts.signal?.throwIfAborted(); // signal đã huỷ từ trước: addEventListener bên dưới sẽ không bắn nữa
   const put = opts.putPart ?? xhrPutPart;
   const total = file.size;
   const loaded = new Map<number, number>();
@@ -177,7 +178,9 @@ export async function uploadVideo(file: File, meta: VideoMeta, opts: UploadOptio
   });
   opts.onCreated?.(created.id);
   try {
+    opts.signal?.throwIfAborted();
     await uploadParts(file, created.upload, opts);
+    opts.signal?.throwIfAborted(); // huỷ giữa lúc part cuối xong và complete
     await adminApi.complete(created.id);
   } catch (err) {
     throw new UploadVideoError(created.id, err);
