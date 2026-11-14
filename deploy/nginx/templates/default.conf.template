@@ -1,4 +1,6 @@
-# "CDN" giả lập (M3): chỉ phục vụ HLS qua URL có chữ ký.
+# Cổng vào duy nhất của trình duyệt (M4, ADR 0011): SPA người xem ở /, API ở /api/ (proxy tới api:8000),
+# "CDN" giả lập ở /cdn/ (chỉ phục vụ HLS qua URL có chữ ký, M3). Cùng origin nên cookie HttpOnly
+# của API dùng được mà không cần CORS.
 # Đây là template: lúc khởi động, image nginx chạy envsubst (chỉ với biến khớp NGINX_ENVSUBST_FILTER=^CDN_)
 # rồi ghi ra /etc/nginx/conf.d/default.conf. Biến nginx ($sl_exp, $uri, ...) giữ nguyên.
 proxy_cache_path /var/cache/nginx/hls levels=1:2 keys_zone=hls:10m max_size=1g inactive=7d use_temp_path=off;
@@ -37,11 +39,37 @@ server {
         return 403;
     }
 
+    # API: chuyển nguyên URI (/api/...) tới service api. proxy_pass dùng biến + resolver DNS của Docker
+    # nên nginx vẫn khởi động khi api chưa chạy và theo kịp IP mới khi api được tạo lại.
+    location /api/ {
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $api_upstream http://api:8000;
+        proxy_pass $api_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Request-Id $request_id;
+    }
+
     # Trang test hls.js (M1): /dev/player.html?src=<URL ký từ /api/videos/{id}/play>.
     location /dev/ {
         root /usr/share/nginx/html;
     }
 
-    # Không còn đường /hls/ không ký; mọi đường khác 404.
-    location / { return 404; }
+    # Không có đường /hls/ không ký (kể cả fallback SPA).
+    location /hls/ { return 404; }
+
+    # File build của Vite có hash trong tên: cache lâu dài.
+    location /assets/ {
+        root /usr/share/nginx/html;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+
+    # SPA: file tĩnh nếu có, còn lại trả index.html để react-router xử lý (/watch/{id}, /search, ...).
+    location / {
+        root /usr/share/nginx/html;
+        add_header Cache-Control "no-cache";
+        try_files $uri /index.html;
+    }
 }

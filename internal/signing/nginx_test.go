@@ -18,8 +18,10 @@ import (
 const nginxImage = "nginx:1.27-alpine"
 
 // originConf: nginx thứ hai đóng vai MinIO (alias "minio", cổng 9000), phục vụ file tĩnh
-// dưới /srv/hls/... giống bucket hls cho đọc ẩn danh (ADR 0002).
-const originConf = `server { listen 9000; root /srv; }`
+// dưới /srv/hls/... giống bucket hls cho đọc ẩn danh (ADR 0002), và đóng vai api (alias "api",
+// cổng 8000) trả lại URI nhận được để kiểm tra proxy /api/ giữ nguyên đường dẫn và query.
+const originConf = `server { listen 9000; root /srv; }
+server { listen 8000; location / { return 200 "api:$request_uri"; } }`
 
 // TestNginxSecureLinkParity chạy đúng template nginx của repo và kiểm tra nginx chấp nhận
 // URL do SignedPath sinh ra, từ chối URL sửa chữ ký / hết hạn / khác video.
@@ -37,8 +39,8 @@ func TestNginxSecureLinkParity(t *testing.T) {
 	}
 
 	origin, err := testcontainers.Run(ctx, nginxImage,
-		network.WithNetwork([]string{"minio"}, nw),
-		testcontainers.WithExposedPorts("9000/tcp"),
+		network.WithNetwork([]string{"minio", "api"}, nw),
+		testcontainers.WithExposedPorts("9000/tcp", "8000/tcp"),
 		testcontainers.WithFiles(
 			testcontainers.ContainerFile{Reader: strings.NewReader(originConf),
 				ContainerFilePath: "/etc/nginx/conf.d/default.conf", FileMode: 0o644},
@@ -47,7 +49,7 @@ func TestNginxSecureLinkParity(t *testing.T) {
 			testcontainers.ContainerFile{Reader: strings.NewReader("segment-bytes"),
 				ContainerFilePath: "/srv/hls/" + testVID + "/720p/seg_000.ts", FileMode: 0o644},
 		),
-		testcontainers.WithWaitStrategy(wait.ForListeningPort("9000/tcp")),
+		testcontainers.WithWaitStrategy(wait.ForListeningPort("9000/tcp"), wait.ForListeningPort("8000/tcp")),
 	)
 	testcontainers.CleanupContainer(t, origin)
 	if err != nil {
@@ -102,6 +104,11 @@ func TestNginxSecureLinkParity(t *testing.T) {
 		{"non-numeric exp", fmt.Sprintf("/cdn/s/%s/abc/hls/%s/master.m3u8", sig, testVID), 403, ""},
 		{"malformed cdn path", "/cdn/s/" + sig, 403, ""},
 		{"unsigned hls path", "/hls/" + testVID + "/master.m3u8", 404, ""},
+		// M4: cùng origin với SPA và API (ADR 0011).
+		{"api proxied with path and query", "/api/videos?q=tro%20choi&page=2", 200, "api:/api/videos?q=tro%20choi&page=2"},
+		{"spa root", "/", 200, ""},
+		{"spa fallback route", "/watch/" + testVID, 200, ""},
+		{"missing asset", "/assets/missing.js", 404, ""},
 	}
 	for _, c := range cases {
 		resp, err := http.Get(endpoint + c.path)
@@ -122,6 +129,11 @@ func TestNginxSecureLinkParity(t *testing.T) {
 		}
 	}
 
+	// Fallback SPA trả đúng index.html (react-router xử lý route phía trình duyệt).
+	if root, route := getBody(t, endpoint+"/"), getBody(t, endpoint+"/search?q=x"); root == "" || root != route {
+		t.Errorf("SPA fallback body khác index.html: %q vs %q", route, root)
+	}
+
 	// Lần hai cùng file (kể cả với chữ ký khác) là cache HIT: cache key không chứa chữ ký.
 	other := SignedPath(testSecret, testVID, "master.m3u8", exp+60)
 	resp, err := http.Get(endpoint + other)
@@ -132,4 +144,18 @@ func TestNginxSecureLinkParity(t *testing.T) {
 	if got := resp.Header.Get("X-Cache-Status"); got != "HIT" {
 		t.Errorf("X-Cache-Status = %q, want HIT", got)
 	}
+}
+
+func getBody(t *testing.T, url string) string {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
