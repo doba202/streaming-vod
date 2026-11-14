@@ -18,9 +18,11 @@ type AdminStore interface {
 	List(ctx context.Context, f ListFilter) ([]Video, error)
 	Get(ctx context.Context, id string) (Video, error)
 	Renditions(ctx context.Context, id string) ([]Rendition, error)
+	Subtitles(ctx context.Context, videoID string) ([]Subtitle, error)
+	UpdateMetadata(ctx context.Context, id string, m Metadata) (Video, error)
 }
 
-// AdminHandler: endpoint đọc cho admin. M2 chưa có auth; M3 thêm middleware role admin.
+// AdminHandler: danh sách, chi tiết (M2) và sửa metadata (M7) cho admin; router bọc auth.RequireAdmin.
 type AdminHandler struct {
 	Videos AdminStore
 	Log    *slog.Logger
@@ -42,6 +44,8 @@ type VideoJSON struct {
 	CreatedAt   time.Time   `json:"created_at"`
 	UpdatedAt   time.Time   `json:"updated_at"`
 	Renditions  []Rendition `json:"renditions,omitempty"`
+	// Subtitles chỉ có ở GET /api/admin/videos/{id} (omitzero: nil ở danh sách thì bỏ, [] khi chưa có phụ đề vẫn ghi).
+	Subtitles []AdminSubtitleJSON `json:"subtitles,omitzero"`
 }
 
 func toJSON(v Video) VideoJSON {
@@ -57,6 +61,7 @@ func toJSON(v Video) VideoJSON {
 func (h *AdminHandler) Routes(r chi.Router) {
 	r.Get("/api/admin/videos", h.list)
 	r.Get("/api/admin/videos/{id}", h.get)
+	r.Patch("/api/admin/videos/{id}", h.patch)
 }
 
 func (h *AdminHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +114,85 @@ func (h *AdminHandler) get(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	subs, err := h.Videos.Subtitles(r.Context(), id)
+	if err != nil {
+		h.Log.ErrorContext(r.Context(), "get subtitles", "video_id", id, "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 	out := toJSON(v)
 	out.Renditions = rs
+	out.Subtitles = make([]AdminSubtitleJSON, 0, len(subs))
+	for _, s := range subs {
+		out.Subtitles = append(out.Subtitles, AdminSubtitleJSON{Lang: s.Lang, Label: s.Label, VTTKey: s.VTTKey})
+	}
 	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// PatchInput: field bỏ trống (không có trong JSON) giữ nguyên; "year": 0 xoá năm; "genres": [] xoá thể loại.
+type PatchInput struct {
+	Title       *string   `json:"title"`
+	Description *string   `json:"description"`
+	Genres      *[]string `json:"genres"`
+	Year        *int      `json:"year"`
+}
+
+// patch sửa metadata ở mọi trạng thái (kể cả đang transcode: chỉ đụng các cột metadata).
+// Đọc rồi ghi đè cả bốn cột: hai admin sửa cùng lúc thì bản ghi sau thắng.
+func (h *AdminHandler) patch(w http.ResponseWriter, r *http.Request) {
+	parsed, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "video not found")
+		return
+	}
+	id := parsed.String()
+	var in PatchInput
+	if err := httpx.DecodeJSON(w, r, &in); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if in.Title == nil && in.Description == nil && in.Genres == nil && in.Year == nil {
+		httpx.WriteError(w, http.StatusBadRequest, "nothing to update")
+		return
+	}
+	cur, err := h.Videos.Get(r.Context(), id)
+	if errors.Is(err, ErrNotFound) {
+		httpx.WriteError(w, http.StatusNotFound, "video not found")
+		return
+	}
+	if err != nil {
+		h.Log.ErrorContext(r.Context(), "get video", "video_id", id, "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	m := Metadata{Title: cur.Title, Description: cur.Description, Genres: cur.Genres, Year: cur.Year}
+	if in.Title != nil {
+		m.Title = *in.Title
+	}
+	if in.Description != nil {
+		m.Description = *in.Description
+	}
+	if in.Genres != nil {
+		m.Genres = *in.Genres
+	}
+	if in.Year != nil {
+		m.Year = *in.Year
+	}
+	m, err = NormalizeMetadata(m)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	v, err := h.Videos.UpdateMetadata(r.Context(), id, m)
+	if errors.Is(err, ErrNotFound) { // bị xoá giữa Get và UPDATE
+		httpx.WriteError(w, http.StatusNotFound, "video not found")
+		return
+	}
+	if err != nil {
+		h.Log.ErrorContext(r.Context(), "update video", "video_id", id, "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	h.Log.InfoContext(r.Context(), "video metadata updated", "video_id", id)
+	httpx.WriteJSON(w, http.StatusOK, toJSON(v))
 }

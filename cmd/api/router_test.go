@@ -29,6 +29,9 @@ func (emptyStore) Renditions(context.Context, string) ([]catalog.Rendition, erro
 func (emptyStore) Subtitles(context.Context, string) ([]catalog.Subtitle, error)   { return nil, nil }
 func (emptyStore) ReadyByIDs(context.Context, []string) ([]catalog.Video, error)   { return nil, nil }
 func (emptyStore) ResumeAt(context.Context, string, string) (int, error)           { return 0, nil }
+func (emptyStore) UpdateMetadata(context.Context, string, catalog.Metadata) (catalog.Video, error) {
+	return catalog.Video{}, catalog.ErrNotFound
+}
 func (emptyStore) ContinueWatching(context.Context, string, int) ([]catalog.WatchEntry, error) {
 	return nil, nil
 }
