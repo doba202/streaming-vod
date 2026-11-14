@@ -17,6 +17,8 @@ const (
 	TopicVideoTranscoded  = "video.transcoded"
 	TopicVideoFailed      = "video.failed"
 	TopicPlaybackEvents   = "playback.events"
+	// TopicAppLogs: mỗi record là một dòng log JSON của slog (M6), không có key.
+	TopicAppLogs = "app.logs"
 )
 
 var VideoTopics = []string{TopicVideoUploaded, TopicVideoUploadedDLQ, TopicVideoProcessing,
