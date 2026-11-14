@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Streamfilm dev player</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 960px; margin: 24px auto; padding: 0 16px; }
+  video { width: 100%; background: #000; }
+  #levels button { margin: 4px; }
+  #levels button.on { font-weight: bold; }
+  pre { background: #f3f3f3; padding: 8px; max-height: 200px; overflow: auto; }
+</style>
+</head>
+<body>
+<h1>Streamfilm dev player</h1>
+<p>Mở <code>/dev/player.html?id=demo</code>. Trang tải <code>/hls/{id}/master.m3u8</code> qua nginx.</p>
+<video id="v" controls muted></video>
+<div id="levels"></div>
+<pre id="log"></pre>
+<script>
+  const id = new URLSearchParams(location.search).get('id') || 'demo';
+  const src = `/hls/${id}/master.m3u8`;
+  const video = document.getElementById('v');
+  const logEl = document.getElementById('log');
+  const log = (m) => { logEl.textContent += m + '\n'; logEl.scrollTop = logEl.scrollHeight; };
+
+  if (Hls.isSupported()) {
+    const hls = new Hls();
+    hls.loadSource(src);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+      log(`manifest: ${data.levels.map(l => l.height + 'p').join(', ')}`);
+      const box = document.getElementById('levels');
+      const auto = document.createElement('button');
+      auto.textContent = 'Auto';
+      auto.onclick = () => { hls.currentLevel = -1; };
+      box.appendChild(auto);
+      data.levels.forEach((l, i) => {
+        const b = document.createElement('button');
+        b.textContent = l.height + 'p';
+        b.onclick = () => { hls.currentLevel = i; };
+        box.appendChild(b);
+      });
+    });
+    hls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
+      const h = hls.levels[d.level].height;
+      log(`switched to ${h}p`);
+      document.querySelectorAll('#levels button').forEach(b => b.classList.toggle('on', b.textContent === h + 'p'));
+    });
+    hls.on(Hls.Events.FRAG_LOADED, (_, d) => log(`segment ${d.frag.sn} @ level ${d.frag.level}`));
+    hls.on(Hls.Events.ERROR, (_, d) => log(`error: ${d.type} ${d.details}`));
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = src; // Safari phát HLS gốc
+  }
+</script>
+</body>
+</html>
