@@ -2,7 +2,8 @@
 # E2E M2 (cập nhật M3): đăng nhập admin → tạo video → upload multipart qua presigned URL → complete
 # → đợi ready → kiểm tra HLS qua nginx bằng URL ký từ /play.
 # Dùng: scripts/e2e-m2.sh [file] (mặc định tmp/sample.mp4). Cần: curl, jq, split.
-# Biến: ADMIN_EMAIL, ADMIN_PASSWORD (make e2e-m2 nạp từ .env); E2E_ID_FILE: nếu đặt, ghi video id vào file đó.
+# Biến: ADMIN_EMAIL, ADMIN_PASSWORD (make e2e-m2 nạp từ .env); E2E_ID_FILE: nếu đặt, ghi video id vào file đó;
+# E2E_TITLE, E2E_GENRE: tiêu đề và thể loại của video tạo ra (e2e-m4 dùng tiêu đề tiếng Việt để kiểm tra tìm kiếm).
 set -euo pipefail
 
 FILE="${1:-tmp/sample.mp4}"
@@ -30,8 +31,8 @@ jq -n --arg e "$ADMIN_EMAIL" --arg p "$ADMIN_PASSWORD" '{email: $e, password: $p
   jq -e '.role == "admin"' >/dev/null || die "đăng nhập admin thất bại (chạy: make seed-admin)"
 
 echo "1/5 tạo video ($NAME, $SIZE bytes)"
-BODY=$(jq -n --arg t "E2E $(date +%H:%M:%S)" --arg f "$NAME" --argjson s "$SIZE" \
-  '{title: $t, filename: $f, size_bytes: $s, genres: ["test"], year: 2026}')
+BODY=$(jq -n --arg t "${E2E_TITLE:-E2E $(date +%H:%M:%S)}" --arg g "${E2E_GENRE:-test}" --arg f "$NAME" \
+  --argjson s "$SIZE" '{title: $t, filename: $f, size_bytes: $s, genres: [$g], year: 2026}')
 CREATE=$(api -X POST "$API/api/admin/videos" -H 'Content-Type: application/json' -d "$BODY")
 ID=$(echo "$CREATE" | jq -r .id)
 PART_SIZE=$(echo "$CREATE" | jq -r .upload.part_size)

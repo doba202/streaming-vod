@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # E2E M3: đăng ký/đăng nhập, phân quyền, /play trả URL ký, nginx chặn URL sai hoặc hết hạn.
-# Dùng: scripts/e2e-m3.sh [file] (mặc định tmp/sample.mp4). Cần: curl, jq, openssl, split.
+# Dùng: scripts/e2e-m3.sh [file] (mặc định tmp/sample.mp4). Cần: curl, jq, openssl.
 # Biến: ADMIN_EMAIL, ADMIN_PASSWORD, CDN_SIGNING_SECRET (make e2e-m3 nạp từ .env).
 set -euo pipefail
 
@@ -10,7 +10,7 @@ CDN="${CDN:-http://localhost:8088}"
 : "${CDN_SIGNING_SECRET:?cần CDN_SIGNING_SECRET (chạy qua make e2e-m3)}"
 
 die() { echo "FAIL: $*" >&2; exit 1; }
-for c in curl jq openssl split; do command -v "$c" >/dev/null || die "thiếu lệnh $c"; done
+for c in curl jq openssl; do command -v "$c" >/dev/null || die "thiếu lệnh $c"; done
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -19,12 +19,14 @@ EMAIL="viewer-$(date +%s)-$RANDOM@example.com"
 PASSWORD="viewer-password-1"
 NOID="00000000-0000-0000-0000-000000000000"
 
-# expect CODE curl-args...: gọi curl và so mã HTTP.
+# expect CODE curl-args...: gọi curl và so mã HTTP. Khi lỗi chỉ in URL, không in tham số khác
+# (body -d có thể chứa mật khẩu).
 expect() {
   local want=$1; shift
-  local code
+  local code a url=""
+  for a in "$@"; do case $a in http://* | https://*) url=$a ;; esac; done
   code=$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' "$@")
-  [ "$code" = "$want" ] || die "curl $*: HTTP $code, want $want"
+  [ "$code" = "$want" ] || die "$url: HTTP $code, want $want"
 }
 creds() { jq -n --arg e "$1" --arg p "$2" '{email: $e, password: $p}'; }
 # sign EXP ID: cùng công thức với nginx secure_link_md5 và internal/signing (tính độc lập bằng openssl).
