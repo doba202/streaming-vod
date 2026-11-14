@@ -5,6 +5,7 @@
 //	api sign -id ID [-file F] [-ttl 2h]     in URL CDN đã ký cho một video (debug, dev player)
 //
 // M3: đăng ký/đăng nhập (JWT cookie), /api/admin/* chỉ cho role admin, catalog và /play cho user.
+// M5: phụ đề (admin upload), poster/sprite ký URL, sự kiện xem → watch_progress + playback.events, "Xem tiếp".
 package main
 
 import (
@@ -26,6 +27,7 @@ import (
 	"streamfilm/internal/config"
 	"streamfilm/internal/db"
 	"streamfilm/internal/events"
+	"streamfilm/internal/playback"
 	"streamfilm/internal/signing"
 	"streamfilm/internal/storage"
 	"streamfilm/internal/upload"
@@ -92,6 +94,9 @@ func run(log *slog.Logger) error {
 	defer consumer.Close()
 
 	repo := catalog.NewRepo(pool)
+	progress := playback.NewRepo(pool)
+	// playback.events: publish ở nền, Kafka chết thì bỏ sự kiện, không làm hỏng việc xem (spec §7).
+	playbackEvents := playback.NewBestEffort(producer, playback.PublishTimeout, playback.MaxInFlight, log)
 	svc := &upload.Service{Videos: repo, Objects: store, Pub: producer, BucketRaw: cfg.BucketRaw,
 		Now: time.Now, NewID: uuid.NewString, Log: log}
 
@@ -99,7 +104,8 @@ func run(log *slog.Logger) error {
 	handler := newRouter(log, routes{
 		Tokens:    tokens,
 		Auth:      &auth.Handler{Svc: authSvc, SecureCookie: cfg.CookieSecure, Log: log},
-		Viewer:    &catalog.ViewerHandler{Videos: repo, Signer: signer, CDNBaseURL: cfg.CDNBaseURL, Log: log},
+		Viewer:    &catalog.ViewerHandler{Videos: repo, Progress: progress, Signer: signer, CDNBaseURL: cfg.CDNBaseURL, Log: log},
+		Events:    &playback.Handler{Videos: repo, Progress: progress, Events: playbackEvents, Now: time.Now, Log: log},
 		Upload:    &upload.Handler{Svc: svc, Log: log},
 		Admin:     &catalog.AdminHandler{Videos: repo, Log: log},
 		Subtitles: &catalog.SubtitleHandler{Videos: repo, Objects: store, BucketHLS: cfg.BucketHLS, Log: log},
@@ -146,6 +152,7 @@ func run(log *slog.Logger) error {
 		serveErr = err
 	}
 	wg.Wait()
+	playbackEvents.Wait() // trước producer.Close (defer): mỗi publish chờ tối đa PublishTimeout
 	if errors.Is(serveErr, http.ErrServerClosed) {
 		serveErr = nil
 	}

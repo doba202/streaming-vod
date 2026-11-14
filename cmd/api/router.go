@@ -10,6 +10,7 @@ import (
 	"streamfilm/internal/auth"
 	"streamfilm/internal/catalog"
 	"streamfilm/internal/httpx"
+	"streamfilm/internal/playback"
 	"streamfilm/internal/upload"
 )
 
@@ -17,12 +18,14 @@ type routes struct {
 	Tokens    *auth.Tokens
 	Auth      *auth.Handler
 	Viewer    *catalog.ViewerHandler
+	Events    *playback.Handler
 	Upload    *upload.Handler
 	Admin     *catalog.AdminHandler
 	Subtitles *catalog.SubtitleHandler
 }
 
-// newRouter: public (/healthz, /api/auth/*), user (/api/me, /api/videos/*), admin (/api/admin/*).
+// newRouter: public (/healthz, /api/auth/*), user (/api/me, /api/me/continue-watching, /api/videos/*,
+// /api/genres, /api/playback/events), admin (/api/admin/*).
 func newRouter(log *slog.Logger, rt routes) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.Recoverer, httpx.RequestLogger(log), rt.Tokens.Authenticate)
@@ -31,6 +34,7 @@ func newRouter(log *slog.Logger, rt routes) http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireUser)
 		rt.Viewer.Routes(r)
+		rt.Events.Routes(r)
 	})
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireAdmin)

@@ -3,16 +3,20 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"streamfilm/internal/auth"
 )
 
 type fakeViewerStore struct {
@@ -67,9 +71,53 @@ func (s fakeSigner) StablePath(id, file string) (string, time.Time, error) {
 	return "/cdn/s/STABLE/" + fmt.Sprint(s.exp.Unix()) + "/hls/" + id + "/" + file, s.exp, nil
 }
 
+func (f *fakeViewerStore) ReadyByIDs(_ context.Context, ids []string) ([]Video, error) {
+	var out []Video
+	for i := len(f.videos) - 1; i >= 0; i-- { // thứ tự khác ids: handler phải tự sắp lại
+		v := f.videos[i]
+		if v.Status == StatusReady && slices.Contains(ids, v.ID) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+// fakeProgress: tiến độ của user "user-1".
+type fakeProgress struct {
+	resume  map[string]int
+	entries []WatchEntry
+	err     error
+	limit   int
+}
+
+func (f *fakeProgress) ResumeAt(_ context.Context, userID, videoID string) (int, error) {
+	if userID != "user-1" {
+		return 0, nil
+	}
+	return f.resume[videoID], f.err
+}
+
+func (f *fakeProgress) ContinueWatching(_ context.Context, userID string, limit int) ([]WatchEntry, error) {
+	f.limit = limit
+	if userID != "user-1" {
+		return nil, nil
+	}
+	return f.entries, f.err
+}
+
 func newViewerRouter(store ViewerStore) http.Handler {
+	return newViewerRouterWith(store, &fakeProgress{})
+}
+
+// newViewerRouterWith: mọi request mang identity user-1 (thay cho auth.Authenticate + RequireUser).
+func newViewerRouterWith(store ViewerStore, progress ProgressSource) http.Handler {
 	r := chi.NewRouter()
-	(&ViewerHandler{Videos: store, Signer: fakeSigner{exp: time.Unix(1794736800, 0).UTC()},
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			next.ServeHTTP(w, req.WithContext(auth.WithIdentity(req.Context(), auth.Identity{UserID: "user-1", Role: auth.RoleViewer})))
+		})
+	})
+	(&ViewerHandler{Videos: store, Progress: progress, Signer: fakeSigner{exp: time.Unix(1794736800, 0).UTC()},
 		CDNBaseURL: "http://cdn.test", Log: slog.New(slog.NewTextHandler(io.Discard, nil))}).Routes(r)
 	return r
 }
@@ -247,5 +295,55 @@ func TestViewerPosterAndPlayExtras(t *testing.T) {
 	rec := get(h, "/api/videos/"+idC+"/play")
 	if strings.Contains(rec.Body.String(), "thumbnails_url") || !strings.Contains(rec.Body.String(), `"subtitles":[]`) {
 		t.Errorf("video trước M5: %s", rec.Body)
+	}
+}
+
+func TestViewerResumeAt(t *testing.T) {
+	store := &fakeViewerStore{videos: []Video{{ID: idA, Status: StatusReady, DurationS: 100}}}
+	progress := &fakeProgress{resume: map[string]int{idA: 42}}
+	var p PlayJSON
+	json.Unmarshal(get(newViewerRouterWith(store, progress), "/api/videos/"+idA+"/play").Body.Bytes(), &p)
+	if p.ResumeAt != 42 {
+		t.Errorf("resume_at = %d, want 42", p.ResumeAt)
+	}
+	// Lỗi đọc tiến độ không chặn việc xem: vẫn 200, phát từ đầu.
+	progress.err = errors.New("db down")
+	rec := get(newViewerRouterWith(store, progress), "/api/videos/"+idA+"/play")
+	json.Unmarshal(rec.Body.Bytes(), &p)
+	if rec.Code != http.StatusOK || p.ResumeAt != 0 {
+		t.Errorf("progress lỗi: %d resume_at=%d", rec.Code, p.ResumeAt)
+	}
+}
+
+func TestViewerContinueWatching(t *testing.T) {
+	store := &fakeViewerStore{videos: []Video{
+		{ID: idA, Title: "A", Status: StatusReady, DurationS: 100, PosterKey: idA + "/poster.jpg"},
+		{ID: idB, Title: "B", Status: StatusReady, DurationS: 200},
+	}}
+	t1 := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	progress := &fakeProgress{entries: []WatchEntry{
+		{VideoID: idB, PositionS: 120, DurationS: 200, UpdatedAt: t1.Add(time.Minute)},
+		{VideoID: idX, PositionS: 10, DurationS: 100, UpdatedAt: t1.Add(30 * time.Second)}, // đã bị xoá: bỏ qua
+		{VideoID: idA, PositionS: 40, DurationS: 100, UpdatedAt: t1},
+	}}
+	rec := get(newViewerRouterWith(store, progress), "/api/me/continue-watching")
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Videos []ContinueJSON `json:"videos"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	if len(body.Videos) != 2 || body.Videos[0].ID != idB || body.Videos[0].PositionS != 120 ||
+		!body.Videos[0].WatchedAt.Equal(t1.Add(time.Minute)) || body.Videos[1].ID != idA || body.Videos[1].PositionS != 40 ||
+		body.Videos[1].PosterURL == "" || body.Videos[1].DurationS != 100 {
+		t.Errorf("videos = %+v", body.Videos)
+	}
+	if progress.limit != ContinueWatchingLimit {
+		t.Errorf("limit = %d", progress.limit)
+	}
+	rec = get(newViewerRouterWith(store, &fakeProgress{}), "/api/me/continue-watching")
+	if strings.TrimSpace(rec.Body.String()) != `{"videos":[]}` {
+		t.Errorf("rỗng: %s", rec.Body)
 	}
 }

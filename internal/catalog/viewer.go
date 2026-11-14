@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"streamfilm/internal/auth"
 	"streamfilm/internal/httpx"
 )
 
@@ -24,6 +25,7 @@ type ViewerStore interface {
 	Get(ctx context.Context, id string) (Video, error)
 	Renditions(ctx context.Context, id string) ([]Rendition, error)
 	Subtitles(ctx context.Context, videoID string) ([]Subtitle, error)
+	ReadyByIDs(ctx context.Context, ids []string) ([]Video, error)
 }
 
 // PlaySigner ký đường dẫn trong thư mục hls/{id}/ (signing.Signer). StablePath cho ảnh poster
@@ -36,6 +38,7 @@ type PlaySigner interface {
 // ViewerHandler: catalog và /play cho user đã đăng nhập (router bọc auth.RequireUser).
 type ViewerHandler struct {
 	Videos     ViewerStore
+	Progress   ProgressSource // playback.Repo: resume_at và hàng "Xem tiếp"
 	Signer     PlaySigner
 	CDNBaseURL string // ví dụ http://localhost:8088; URL phát = CDNBaseURL + path đã ký
 	Log        *slog.Logger
@@ -57,6 +60,7 @@ func (h *ViewerHandler) Routes(r chi.Router) {
 	r.Get("/api/genres", h.genres)
 	r.Get("/api/videos/{id}", h.get)
 	r.Get("/api/videos/{id}/play", h.play)
+	r.Get("/api/me/continue-watching", h.continueWatching)
 }
 
 type ViewerRenditionJSON struct {
@@ -100,6 +104,13 @@ func toViewerJSON(v Video) ViewerVideoJSON {
 	}
 	return ViewerVideoJSON{ID: v.ID, Title: v.Title, Description: v.Description, Genres: genres,
 		Year: v.Year, DurationS: v.DurationS, CreatedAt: v.CreatedAt}
+}
+
+// ContinueJSON: một video của hàng "Xem tiếp" — thông tin như catalog kèm vị trí đã xem.
+type ContinueJSON struct {
+	ViewerVideoJSON
+	PositionS int       `json:"position_s"`
+	WatchedAt time.Time `json:"watched_at"`
 }
 
 // fileInDir: key "{id}/poster.jpg" → "poster.jpg". Key không nằm trong thư mục của video → false.
@@ -252,6 +263,14 @@ func (h *ViewerHandler) play(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out.ThumbnailsURL, _ = h.signFile(v.ID, v.SpriteKey)
+	// resume_at lỗi thì phát từ đầu: không vì tiến độ mà chặn việc xem.
+	if id, ok := auth.FromContext(r.Context()); ok {
+		if at, err := h.Progress.ResumeAt(r.Context(), id.UserID, v.ID); err != nil {
+			h.Log.Warn("resume_at", "video_id", v.ID, "err", err)
+		} else {
+			out.ResumeAt = at
+		}
+	}
 	// URL có hạn dùng riêng cho user này: không cho cache trung gian giữ lại.
 	w.Header().Set("Cache-Control", "no-store")
 	httpx.WriteJSON(w, http.StatusOK, out)
@@ -269,4 +288,42 @@ func (h *ViewerHandler) signFile(videoID, key string) (string, bool) {
 		return "", false
 	}
 	return h.CDNBaseURL + p, true
+}
+
+// continueWatching: GET /api/me/continue-watching → {"videos": [...]} tối đa ContinueWatchingLimit video
+// đang xem dở (5%–95%), mới xem nhất trước (spec §4.4).
+func (h *ViewerHandler) continueWatching(w http.ResponseWriter, r *http.Request) {
+	id, ok := auth.FromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "login required")
+		return
+	}
+	entries, err := h.Progress.ContinueWatching(r.Context(), id.UserID, ContinueWatchingLimit)
+	if err != nil {
+		h.Log.Error("continue watching", "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	ids := make([]string, len(entries))
+	for i, e := range entries {
+		ids[i] = e.VideoID
+	}
+	vs, err := h.Videos.ReadyByIDs(r.Context(), ids)
+	if err != nil {
+		h.Log.Error("continue watching videos", "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	byID := make(map[string]Video, len(vs))
+	for _, v := range vs {
+		byID[v.ID] = v
+	}
+	out := make([]ContinueJSON, 0, len(entries))
+	for _, e := range entries { // giữ thứ tự updated_at DESC của watch_progress
+		if v, ok := byID[e.VideoID]; ok {
+			out = append(out, ContinueJSON{ViewerVideoJSON: h.toViewer(v), PositionS: e.PositionS, WatchedAt: e.UpdatedAt})
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"videos": out})
 }

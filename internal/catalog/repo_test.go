@@ -191,3 +191,21 @@ func TestRepoSearchBrowse(t *testing.T) {
 		t.Errorf("page 2 = %+v, err = %v", page2, err)
 	}
 }
+
+func TestRepoReadyByIDs(t *testing.T) {
+	r := newTestRepo(t)
+	ctx := context.Background()
+	for _, id := range []string{idA, idB} {
+		if err := r.Create(ctx, newVideo(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	makeReady(t, r, idA) // idB vẫn uploading
+	vs, err := r.ReadyByIDs(ctx, []string{idA, idB, idX})
+	if err != nil || len(vs) != 1 || vs[0].ID != idA {
+		t.Errorf("ReadyByIDs = %+v, err = %v", vs, err)
+	}
+	if vs, err := r.ReadyByIDs(ctx, nil); err != nil || len(vs) != 0 {
+		t.Errorf("ids rỗng: %+v, %v", vs, err)
+	}
+}

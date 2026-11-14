@@ -103,6 +103,19 @@ func (r *Repo) List(ctx context.Context, f ListFilter) ([]Video, error) {
 	return collectVideos(rows)
 }
 
+// ReadyByIDs trả các video ready trong ids (thứ tự bất kỳ; id không có hoặc chưa ready bị bỏ qua).
+func (r *Repo) ReadyByIDs(ctx context.Context, ids []string) ([]Video, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := r.pool.Query(ctx, `SELECT `+videoColumns+` FROM videos
+		WHERE id = ANY($1::uuid[]) AND status = 'ready'`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("videos by ids: %w", err)
+	}
+	return collectVideos(rows)
+}
+
 func collectVideos(rows pgx.Rows) ([]Video, error) {
 	defer rows.Close()
 	var out []Video

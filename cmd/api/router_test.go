@@ -11,6 +11,7 @@ import (
 
 	"streamfilm/internal/auth"
 	"streamfilm/internal/catalog"
+	"streamfilm/internal/playback"
 	"streamfilm/internal/upload"
 )
 
@@ -26,6 +27,11 @@ func (emptyStore) Get(context.Context, string) (catalog.Video, error) {
 }
 func (emptyStore) Renditions(context.Context, string) ([]catalog.Rendition, error) { return nil, nil }
 func (emptyStore) Subtitles(context.Context, string) ([]catalog.Subtitle, error)   { return nil, nil }
+func (emptyStore) ReadyByIDs(context.Context, []string) ([]catalog.Video, error)   { return nil, nil }
+func (emptyStore) ResumeAt(context.Context, string, string) (int, error)           { return 0, nil }
+func (emptyStore) ContinueWatching(context.Context, string, int) ([]catalog.WatchEntry, error) {
+	return nil, nil
+}
 
 // TestRouterAuthz kiểm tra phân quyền theo nhóm route; handler phía sau dùng store rỗng.
 func TestRouterAuthz(t *testing.T) {
@@ -37,7 +43,8 @@ func TestRouterAuthz(t *testing.T) {
 	h := newRouter(log, routes{
 		Tokens:    tokens,
 		Auth:      &auth.Handler{Svc: &auth.Service{Tokens: tokens}, Log: log},
-		Viewer:    &catalog.ViewerHandler{Videos: emptyStore{}, Log: log},
+		Viewer:    &catalog.ViewerHandler{Videos: emptyStore{}, Progress: emptyStore{}, Log: log},
+		Events:    &playback.Handler{Videos: emptyStore{}, Log: log},
 		Upload:    &upload.Handler{Log: log},
 		Admin:     &catalog.AdminHandler{Videos: emptyStore{}, Log: log},
 		Subtitles: &catalog.SubtitleHandler{Log: log},
@@ -68,6 +75,10 @@ func TestRouterAuthz(t *testing.T) {
 		{"GET", "/api/admin/videos", admin, 200},
 		{"GET", "/api/admin/videos", "not-a-jwt", 401},
 		{"GET", "/api/me", "", 401},
+		{"GET", "/api/me/continue-watching", "", 401},
+		{"GET", "/api/me/continue-watching", viewer, 200},
+		{"POST", "/api/playback/events", "", 401},
+		{"POST", "/api/playback/events", viewer, 400}, // body rỗng
 	}
 	for _, c := range cases {
 		req := httptest.NewRequest(c.method, c.path, nil)
