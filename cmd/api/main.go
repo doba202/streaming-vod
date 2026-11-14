@@ -112,7 +112,7 @@ func run(log *slog.Logger) error {
 	progress := playback.NewRepo(pool)
 	// playback.events: publish ở nền, Kafka chết thì bỏ sự kiện, không làm hỏng việc xem (spec §7).
 	playbackEvents := playback.NewBestEffort(producer, playback.PublishTimeout, playback.MaxInFlight, log)
-	svc := &upload.Service{Videos: repo, Objects: store, Pub: producer, BucketRaw: cfg.BucketRaw,
+	svc := &upload.Service{Videos: repo, Objects: store, Pub: producer, BucketRaw: cfg.BucketRaw, BucketHLS: cfg.BucketHLS,
 		Now: time.Now, NewID: uuid.NewString, Log: log}
 
 	authSvc := &auth.Service{Users: auth.NewRepo(pool), Tokens: tokens, NewID: uuid.NewString}

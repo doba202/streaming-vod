@@ -76,6 +76,11 @@ func TestRouterAuthz(t *testing.T) {
 		{"POST", "/api/admin/videos/11111111-1111-1111-1111-111111111111/subtitles", viewer, 403},
 		{"POST", "/api/admin/videos/11111111-1111-1111-1111-111111111111/subtitles", admin, 400}, // không phải multipart
 		{"GET", "/api/admin/videos", admin, 200},
+		{"PATCH", "/api/admin/videos/11111111-1111-1111-1111-111111111111", "", 401},
+		{"PATCH", "/api/admin/videos/11111111-1111-1111-1111-111111111111", viewer, 403},
+		{"PATCH", "/api/admin/videos/11111111-1111-1111-1111-111111111111", admin, 400}, // body rỗng
+		{"DELETE", "/api/admin/videos/11111111-1111-1111-1111-111111111111", "", 401},
+		{"DELETE", "/api/admin/videos/11111111-1111-1111-1111-111111111111", viewer, 403},
 		{"GET", "/api/admin/videos", "not-a-jwt", 401},
 		{"GET", "/api/me", "", 401},
 		{"GET", "/api/me/continue-watching", "", 401},

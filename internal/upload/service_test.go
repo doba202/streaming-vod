@@ -69,6 +69,20 @@ func (f *fakeVideos) RevertQueued(_ context.Context, id string, to catalog.Statu
 	return nil
 }
 
+func (f *fakeVideos) Delete(_ context.Context, id string) (catalog.Video, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.m[id]
+	if !ok {
+		return catalog.Video{}, catalog.ErrNotFound
+	}
+	if v.Status == catalog.StatusQueued || v.Status == catalog.StatusProcessing {
+		return v, fmt.Errorf("%w: video is %s", catalog.ErrVideoBusy, v.Status)
+	}
+	delete(f.m, id)
+	return v, nil
+}
+
 func (f *fakeVideos) setStatus(id string, s catalog.Status) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -92,6 +106,8 @@ type fakeObjects struct {
 	exists        bool
 	completeCalls int
 	created       []string
+	deleted       []string // bucket/prefix của DeletePrefix
+	deleteErr     error
 }
 
 func (f *fakeObjects) CreateMultipartUpload(_ context.Context, bucket, key, contentType string) (string, error) {
@@ -123,6 +139,11 @@ func (f *fakeObjects) AbortMultipartUpload(_ context.Context, bucket, key, uploa
 
 func (f *fakeObjects) Exists(context.Context, string, string) (bool, error) { return f.exists, nil }
 
+func (f *fakeObjects) DeletePrefix(_ context.Context, bucket, prefix string) (int, error) {
+	f.deleted = append(f.deleted, bucket+"/"+prefix)
+	return 1, f.deleteErr
+}
+
 type published struct {
 	topic string
 	ev    events.Event
@@ -146,7 +167,7 @@ var testNow = time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
 func newService() (*Service, *fakeVideos, *fakeObjects, *fakePub) {
 	vids, objs, pub := newFakeVideos(), &fakeObjects{}, &fakePub{}
 	n := 0
-	svc := &Service{Videos: vids, Objects: objs, Pub: pub, BucketRaw: "raw",
+	svc := &Service{Videos: vids, Objects: objs, Pub: pub, BucketRaw: "raw", BucketHLS: "hls",
 		Now: func() time.Time { return testNow },
 		NewID: func() string {
 			n++
@@ -169,10 +190,12 @@ func TestPartCount(t *testing.T) {
 func TestCreateValidates(t *testing.T) {
 	svc, _, _, _ := newService()
 	cases := map[string]CreateInput{
-		"no title":  {Title: "  ", Filename: "a.mp4", SizeBytes: 10},
-		"zero size": {Title: "A", Filename: "a.mp4"},
-		"too big":   {Title: "A", Filename: "a.mp4", SizeBytes: MaxSizeBytes + 1},
-		"bad ext":   {Title: "A", Filename: "a.avi", SizeBytes: 10},
+		"no title":   {Title: "  ", Filename: "a.mp4", SizeBytes: 10},
+		"zero size":  {Title: "A", Filename: "a.mp4"},
+		"too big":    {Title: "A", Filename: "a.mp4", SizeBytes: MaxSizeBytes + 1},
+		"bad ext":    {Title: "A", Filename: "a.avi", SizeBytes: 10},
+		"bad year":   {Title: "A", Filename: "a.mp4", SizeBytes: 10, Year: 99999},
+		"long title": {Title: strings.Repeat("a", catalog.MaxTitleLen+1), Filename: "a.mp4", SizeBytes: 10},
 	}
 	for name, in := range cases {
 		if _, err := svc.Create(context.Background(), in); !errors.Is(err, ErrInvalidInput) {

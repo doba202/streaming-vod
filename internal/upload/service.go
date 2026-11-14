@@ -36,6 +36,7 @@ type Videos interface {
 	Get(ctx context.Context, id string) (catalog.Video, error)
 	Transition(ctx context.Context, id string, to catalog.Status) (catalog.Status, error)
 	RevertQueued(ctx context.Context, id string, to catalog.Status) error
+	Delete(ctx context.Context, id string) (catalog.Video, error)
 }
 
 type Objects interface {
@@ -44,6 +45,7 @@ type Objects interface {
 	CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, wantParts int, wantSize, partSize, maxSize int64) error
 	AbortMultipartUpload(ctx context.Context, bucket, key, uploadID string) error
 	Exists(ctx context.Context, bucket, key string) (bool, error)
+	DeletePrefix(ctx context.Context, bucket, prefix string) (int, error)
 }
 
 type Publisher interface {
@@ -55,6 +57,7 @@ type Service struct {
 	Objects   Objects
 	Pub       Publisher
 	BucketRaw string
+	BucketHLS string // M7: Delete dọn hls/{id}/
 	Now       func() time.Time
 	NewID     func() string
 	Log       *slog.Logger // tuỳ chọn; nil = slog.Default()
@@ -105,9 +108,10 @@ func invalid(format string, args ...any) error {
 
 // Create tạo video (uploading), mở multipart upload và trả presigned URL cho từng part.
 func (s *Service) Create(ctx context.Context, in CreateInput) (CreateOutput, error) {
-	in.Title = strings.TrimSpace(in.Title)
-	if in.Title == "" {
-		return CreateOutput{}, invalid("title is required")
+	meta, err := catalog.NormalizeMetadata(catalog.Metadata{Title: in.Title, Description: in.Description,
+		Genres: in.Genres, Year: in.Year})
+	if err != nil {
+		return CreateOutput{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 	if in.SizeBytes <= 0 || in.SizeBytes > MaxSizeBytes {
 		return CreateOutput{}, invalid("size_bytes must be between 1 and %d", MaxSizeBytes)
@@ -134,8 +138,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateOutput, err
 		}
 		parts[i] = Part{PartNumber: num, URL: url}
 	}
-	err = s.Videos.Create(ctx, catalog.Video{ID: id, Title: in.Title, Description: in.Description,
-		Genres: in.Genres, Year: in.Year, RawKey: key, UploadID: uploadID, SizeBytes: in.SizeBytes})
+	err = s.Videos.Create(ctx, catalog.Video{ID: id, Title: meta.Title, Description: meta.Description,
+		Genres: meta.Genres, Year: meta.Year, RawKey: key, UploadID: uploadID, SizeBytes: in.SizeBytes})
 	if err != nil {
 		// Không để multipart upload mồ côi; lỗi huỷ chỉ log (cleaner/lifecycle sẽ dọn sau).
 		if aerr := s.Objects.AbortMultipartUpload(context.WithoutCancel(ctx), s.BucketRaw, key, uploadID); aerr != nil {
@@ -203,4 +207,31 @@ func (s *Service) enqueue(ctx context.Context, v catalog.Video, prev catalog.Sta
 	}
 	v.Status = catalog.StatusQueued
 	return v, nil
+}
+
+// Delete xoá video khỏi DB (cascade rendition, phụ đề, tiến độ xem) rồi dọn storage: huỷ multipart upload dở,
+// xoá raw/{id}/ và hls/{id}/. Video queued/processing → catalog.ErrVideoBusy (HTTP 409): transcoder có thể
+// đang ghi hls/{id}/, xoá lúc đó sẽ để lại HLS mồ côi. Lỗi storage chỉ log (DB là nguồn sự thật, ADR 0020).
+func (s *Service) Delete(ctx context.Context, id string) error {
+	v, err := s.Videos.Delete(ctx, id)
+	if err != nil {
+		return err
+	}
+	bg := context.WithoutCancel(ctx) // client ngắt kết nối cũng dọn nốt
+	log := s.logger().With("video_id", id)
+	if v.Status == catalog.StatusUploading && v.UploadID != "" {
+		if err := s.Objects.AbortMultipartUpload(bg, s.BucketRaw, v.RawKey, v.UploadID); err != nil {
+			log.WarnContext(ctx, "abort multipart after delete failed", "err", err)
+		}
+	}
+	removed := 0
+	for _, bucket := range []string{s.BucketRaw, s.BucketHLS} {
+		n, err := s.Objects.DeletePrefix(bg, bucket, id+"/")
+		removed += n
+		if err != nil {
+			log.WarnContext(ctx, "delete objects after delete failed", "bucket", bucket, "err", err)
+		}
+	}
+	log.InfoContext(ctx, "video deleted", "status", v.Status, "objects_removed", removed)
+	return nil
 }

@@ -13,8 +13,8 @@ import (
 	"streamfilm/internal/httpx"
 )
 
-// Handler gắn các endpoint upload của admin.
-// M2: CHƯA có auth. M3 bọc nhóm /api/admin bằng middleware yêu cầu role admin.
+// Handler gắn các endpoint vòng đời video của admin: tạo + presigned upload, complete, retry (M2), xoá (M7).
+// Router bọc nhóm /api/admin bằng auth.RequireAdmin (M3).
 type Handler struct {
 	Svc *Service
 	Log *slog.Logger
@@ -24,6 +24,7 @@ func (h *Handler) Routes(r chi.Router) {
 	r.Post("/api/admin/videos", h.create)
 	r.Post("/api/admin/videos/{id}/complete", h.complete)
 	r.Post("/api/admin/videos/{id}/retry", h.retry)
+	r.Delete("/api/admin/videos/{id}", h.delete)
 }
 
 type statusResponse struct {
@@ -71,13 +72,26 @@ func (h *Handler) retry(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, statusResponse{ID: v.ID, Status: v.Status})
 }
 
+func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
+	id, ok := videoID(w, r)
+	if !ok {
+		return
+	}
+	if err := h.Svc.Delete(r.Context(), id); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// videoID trả id dạng chuẩn (chữ thường) để khớp key object {id}/ và cột uuid.
 func videoID(w http.ResponseWriter, r *http.Request) (string, bool) {
-	id := chi.URLParam(r, "id")
-	if _, err := uuid.Parse(id); err != nil {
+	parsed, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
 		httpx.WriteError(w, http.StatusNotFound, "video not found")
 		return "", false
 	}
-	return id, true
+	return parsed.String(), true
 }
 
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
@@ -86,7 +100,7 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, catalog.ErrNotFound):
 		httpx.WriteError(w, http.StatusNotFound, "video not found")
-	case errors.Is(err, catalog.ErrInvalidTransition):
+	case errors.Is(err, catalog.ErrInvalidTransition), errors.Is(err, catalog.ErrVideoBusy):
 		httpx.WriteError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrKafkaUnavailable):
 		h.Log.Warn("publish failed", "request_id", middleware.GetReqID(r.Context()), "err", err)
