@@ -18,6 +18,7 @@
 7. Xem tiếp (continue watching).
 8. Phụ đề (`.srt` / `.vtt`), nhiều ngôn ngữ.
 9. Kafka tự host làm event bus. Sự kiện xem phim và log ứng dụng được lưu vào ClickHouse để phân tích.
+10. Bộ tài liệu dự án (`docs/`) giải thích kiến trúc, các luồng, cách chạy và vận hành (xem mục 11).
 
 ### Ngoài phạm vi (để bản sau)
 
@@ -241,6 +242,22 @@ Log: `slog` JSON, luôn có `service`, `request_id`, và `video_id` nếu có. L
 | M4 | Web người xem | Trang chủ, chi tiết, player, tìm kiếm không dấu |
 | M5 | Xem tiếp, thumbnail, phụ đề | Hàng "Xem tiếp", poster, sprite xem trước khi tua, phụ đề nhiều ngôn ngữ |
 | M6 | Analytics | `playback.events` và `app.logs` vào ClickHouse, có SQL mẫu chạy được |
-| M7 | Hoàn thiện | Trang admin (danh sách, retry, xem lỗi), e2e xanh, README giải thích kiến trúc |
+| M7 | Hoàn thiện | Trang admin (danh sách, retry, xem lỗi), e2e xanh, bộ tài liệu ở mục 11 đầy đủ và khớp với code |
 
 Ước lượng tổng: 2–3 tuần làm cùng AI.
+
+## 11. Tài liệu
+
+Tài liệu là một sản phẩm đầu ra của dự án, viết bằng tiếng Việt, đặt trong `docs/`, đọc được trực tiếp trên GitHub (Markdown + sơ đồ Mermaid).
+
+| File | Nội dung |
+|---|---|
+| `README.md` | Giới thiệu ngắn, yêu cầu cài đặt, `make up` / `make seed-admin` / `make e2e`, đường dẫn tới các tài liệu bên dưới |
+| `docs/architecture.md` | Tổng quan kiến trúc: sơ đồ thành phần, trách nhiệm từng service, lý do chọn công nghệ, đối chiếu với kiến trúc tham khảo của Hygraph |
+| `docs/flows.md` | Sequence diagram cho các luồng: upload và transcode, xem phim với signed URL, xem tiếp và analytics, retry/DLQ |
+| `docs/data-model.md` | Schema Postgres và ClickHouse, trạng thái video, các topic Kafka và schema sự kiện |
+| `docs/api.md` | Danh sách endpoint, quyền, request/response mẫu |
+| `docs/operations.md` | Chạy local, các cổng và UI (Redpanda Console, MinIO Console, ClickHouse), xem log, xử lý sự cố thường gặp, SQL phân tích mẫu |
+| `docs/decisions/` | ADR ngắn cho các quyết định chính (modular monolith + Kafka, signed URL theo prefix, `secure_link_md5`, chấp nhận dual-write) |
+
+**Quy tắc:** mỗi giai đoạn (M0–M7) cập nhật phần tài liệu liên quan trong cùng commit với code. Giai đoạn chỉ được coi là xong khi tài liệu khớp với những gì đã chạy được.
