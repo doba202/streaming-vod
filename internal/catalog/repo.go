@@ -13,6 +13,8 @@ import (
 var (
 	ErrNotFound          = errors.New("video not found")
 	ErrInvalidTransition = errors.New("invalid status transition")
+	// ErrVideoBusy: video đang queued/processing nên chưa xoá được (transcoder có thể đang ghi hls/{id}/).
+	ErrVideoBusy = errors.New("video is being processed")
 )
 
 type Video struct {
@@ -240,6 +242,39 @@ func (r *Repo) DeleteUploading(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// UpdateMetadata ghi đè title, description, genres, year (m đã qua NormalizeMetadata) và trả video sau khi sửa.
+// Trigger videos_search_update tính lại cột search khi title/description đổi.
+func (r *Repo) UpdateMetadata(ctx context.Context, id string, m Metadata) (Video, error) {
+	if m.Genres == nil {
+		m.Genres = []string{}
+	}
+	return scanVideo(r.pool.QueryRow(ctx, `UPDATE videos SET title = $2, description = $3, genres = $4,
+		year = NULLIF($5, 0), updated_at = now() WHERE id = $1 RETURNING `+videoColumns,
+		id, m.Title, m.Description, m.Genres, m.Year))
+}
+
+// Delete xoá video (renditions, subtitles, watch_progress xoá theo ON DELETE CASCADE) và trả dòng đã xoá để
+// dọn object. Video đang queued/processing → ErrVideoBusy; không tồn tại → ErrNotFound. Khoá dòng như
+// transition nên không chen giữa được với retry hay cập nhật trạng thái từ transcoder.
+func (r *Repo) Delete(ctx context.Context, id string) (Video, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return Video{}, err
+	}
+	defer tx.Rollback(ctx)
+	v, err := scanVideo(tx.QueryRow(ctx, `SELECT `+videoColumns+` FROM videos WHERE id = $1 FOR UPDATE`, id))
+	if err != nil {
+		return Video{}, err
+	}
+	if v.Status == StatusQueued || v.Status == StatusProcessing {
+		return v, fmt.Errorf("%w: video is %s", ErrVideoBusy, v.Status)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM videos WHERE id = $1`, id); err != nil {
+		return Video{}, fmt.Errorf("delete video: %w", err)
+	}
+	return v, tx.Commit(ctx)
 }
 
 // SearchParams: tham số catalog / tìm kiếm cho người xem. Chỉ video ready được trả về.
