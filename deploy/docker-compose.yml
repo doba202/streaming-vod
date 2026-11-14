@@ -99,8 +99,12 @@ services:
       interval: 5s
       retries: 20
 
+  # Cổng vào duy nhất cho trình duyệt (ADR 0011): SPA ở /, proxy /api/ → api, HLS ký ở /cdn/.
   nginx:
-    image: nginx:1.27-alpine
+    build:
+      context: ..
+      dockerfile: deploy/docker/nginx.Dockerfile
+    image: streamfilm-nginx:dev
     ports: ["127.0.0.1:8088:80"]
     environment:
       # Entrypoint của image chạy envsubst trên /etc/nginx/templates/*.template → /etc/nginx/conf.d/.
