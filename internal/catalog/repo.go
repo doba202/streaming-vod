@@ -234,3 +234,67 @@ func (r *Repo) ListReady(ctx context.Context, limit, offset int) ([]Video, error
 	}
 	return collectVideos(rows)
 }
+
+// SearchParams: tham số catalog / tìm kiếm cho người xem. Chỉ video ready được trả về.
+type SearchParams struct {
+	Query  string // đã trim; rỗng = duyệt catalog, mới nhất trước
+	Genre  string // rỗng = mọi thể loại; khớp đúng một phần tử của genres
+	Year   int    // 0 = mọi năm
+	Limit  int
+	Offset int
+}
+
+// browseSQL: không có từ khoá, mới nhất trước.
+const browseSQL = `SELECT ` + videoColumns + ` FROM videos
+	WHERE status = 'ready' AND ($1 = '' OR $1 = ANY(genres)) AND ($2 = 0 OR year = $2)
+	ORDER BY created_at DESC, id LIMIT $3 OFFSET $4`
+
+// searchSQL: full-text (websearch_to_tsquery trên cột search, xếp hạng ts_rank). Chỉ khi full-text
+// không có kết quả nào (sau khi lọc) mới dùng trigram trên tiêu đề đã bỏ dấu để chịu lỗi gõ:
+// toán tử <% (word_similarity >= pg_trgm.word_similarity_threshold, mặc định 0.6) dùng được index GIN.
+const searchSQL = `WITH q AS (
+		SELECT websearch_to_tsquery('simple', immutable_unaccent($1)) AS tsq, immutable_unaccent($1) AS uq
+	), base AS (
+		SELECT id, title, search FROM videos
+		WHERE status = 'ready' AND ($2 = '' OR $2 = ANY(genres)) AND ($3 = 0 OR year = $3)
+	), fts AS (
+		SELECT b.id, ts_rank(b.search, q.tsq) AS score FROM base b, q WHERE b.search @@ q.tsq
+	), trgm AS (
+		SELECT b.id, word_similarity(q.uq, immutable_unaccent(b.title)) AS score FROM base b, q
+		WHERE NOT EXISTS (SELECT 1 FROM fts) AND q.uq <% immutable_unaccent(b.title)
+	), hits AS (
+		SELECT id, score FROM fts UNION ALL SELECT id, score FROM trgm
+	)
+	SELECT ` + videoColumns + ` FROM hits JOIN videos USING (id)
+	ORDER BY hits.score DESC, videos.created_at DESC, id LIMIT $4 OFFSET $5`
+
+// Search trả video ready theo từ khoá (có dấu hoặc không dấu), thể loại và năm, phân trang limit/offset.
+func (r *Repo) Search(ctx context.Context, p SearchParams) ([]Video, error) {
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if p.Query == "" {
+		rows, err = r.pool.Query(ctx, browseSQL, p.Genre, p.Year, p.Limit, p.Offset)
+	} else {
+		rows, err = r.pool.Query(ctx, searchSQL, p.Query, p.Genre, p.Year, p.Limit, p.Offset)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("search videos: %w", err)
+	}
+	return collectVideos(rows)
+}
+
+// Genres trả các thể loại (không trùng, sắp xếp) của video ready, để web dựng bộ lọc.
+func (r *Repo) Genres(ctx context.Context) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `SELECT DISTINCT g FROM videos, unnest(genres) AS g
+		WHERE status = 'ready' ORDER BY g`)
+	if err != nil {
+		return nil, fmt.Errorf("list genres: %w", err)
+	}
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if out == nil {
+		out = []string{}
+	}
+	return out, err
+}
