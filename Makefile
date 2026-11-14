@@ -5,8 +5,10 @@ COMPOSE := docker compose -f deploy/docker-compose.yml --env-file .env
 env:
 	@test -f .env || cp .env.example .env
 
+# Các service one-shot (minio-init, kafka-init) thoát với mã 0 nên không dùng --wait cho chúng.
 up: env
-	$(COMPOSE) up -d --wait
+	$(COMPOSE) up -d
+	$(COMPOSE) up -d --wait postgres minio kafka console clickhouse nginx
 
 down:
 	$(COMPOSE) down
