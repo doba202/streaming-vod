@@ -223,3 +223,14 @@ func (r *Repo) DeleteUploading(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+// ListReady trả video ready (catalog cho người xem), mới nhất trước, phân trang bằng limit/offset.
+// Tìm kiếm (q, genre) thêm ở M4.
+func (r *Repo) ListReady(ctx context.Context, limit, offset int) ([]Video, error) {
+	rows, err := r.pool.Query(ctx, `SELECT `+videoColumns+` FROM videos
+		WHERE status = 'ready' ORDER BY created_at DESC, id LIMIT $1 OFFSET $2`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	return collectVideos(rows)
+}

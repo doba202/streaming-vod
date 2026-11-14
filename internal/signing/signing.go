@@ -15,7 +15,9 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 )
 
 // TTL của URL phát (spec §4.3).
@@ -68,6 +70,20 @@ func (s *Signer) Path(videoID, file string) (string, time.Time, error) {
 	if !videoIDRe.MatchString(videoID) {
 		return "", time.Time{}, fmt.Errorf("invalid video id %q", videoID)
 	}
+	if err := validateFile(file); err != nil {
+		return "", time.Time{}, err
+	}
 	exp := s.now().Add(s.ttl).Unix()
 	return SignedPath(s.secret, videoID, file, exp), time.Unix(exp, 0).UTC(), nil
+}
+
+// validateFile từ chối file có thể thoát khỏi thư mục video hoặc làm sai URL:
+// rỗng, bắt đầu bằng "/", chứa "..", "?", "#", "\\" hoặc khoảng trắng.
+func validateFile(file string) error {
+	bad := file == "" || strings.HasPrefix(file, "/") || strings.Contains(file, "..") ||
+		strings.ContainsAny(file, `?#\`) || strings.IndexFunc(file, unicode.IsSpace) >= 0
+	if bad {
+		return fmt.Errorf("invalid file %q", file)
+	}
+	return nil
 }

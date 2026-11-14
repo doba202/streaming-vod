@@ -84,3 +84,20 @@ func TestValidateSecret(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestSignerPathRejectsBadFile(t *testing.T) {
+	s, err := NewSigner(testSecret, TTL, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"", "/master.m3u8", "../x", "a/../b", "a?b", "a#b", `a\b`, "a b", "a\tb", "a\nb"} {
+		if _, _, err := s.Path(testVID, f); err == nil {
+			t.Errorf("Path(%q) accepted, want error", f)
+		}
+	}
+	for _, f := range []string{"master.m3u8", "720p/seg_000.ts", "720p/index.m3u8"} {
+		if _, _, err := s.Path(testVID, f); err != nil {
+			t.Errorf("Path(%q) = %v, want ok", f, err)
+		}
+	}
+}

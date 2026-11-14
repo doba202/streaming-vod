@@ -153,3 +153,37 @@ func TestRepo(t *testing.T) {
 		}
 	})
 }
+
+func TestRepoListReady(t *testing.T) {
+	r := newTestRepo(t)
+	ctx := context.Background()
+	for _, id := range []string{idA, idB, idC} {
+		if err := r.Create(ctx, newVideo(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// idA, idC ready; idB còn uploading.
+	for _, id := range []string{idA, idC} {
+		for _, to := range []Status{StatusQueued, StatusProcessing} {
+			if _, err := r.Transition(ctx, id, to); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := r.MarkReady(ctx, id, ReadyInfo{DurationS: 30, HLSPrefix: id + "/"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := r.ListReady(ctx, 10, 0)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("ListReady = %+v, err = %v", all, err)
+	}
+	for _, v := range all {
+		if v.Status != StatusReady || v.ID == idB {
+			t.Errorf("non-ready video in catalog: %+v", v)
+		}
+	}
+	page2, err := r.ListReady(ctx, 1, 1)
+	if err != nil || len(page2) != 1 || page2[0].ID != all[1].ID {
+		t.Errorf("page 2 = %+v, err = %v", page2, err)
+	}
+}
