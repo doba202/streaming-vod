@@ -10,7 +10,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// Producer publish sự kiện; ProduceSync chờ broker xác nhận (acks=all, idempotent mặc định của franz-go).
+// Producer publish sự kiện. Publish gửi bằng Produce (bất đồng bộ) rồi tự chờ kết quả theo ctx,
+// vì ProduceSync không trả về đúng hạn khi broker chết (xem Publish). acks=all, idempotent mặc định của franz-go.
 type Producer struct {
 	cl *kgo.Client
 }
