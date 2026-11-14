@@ -22,6 +22,7 @@ export function Header() {
               Trang chủ
             </NavLink>
             <NavLink to="/search">Tìm kiếm</NavLink>
+            {user.role === 'admin' && <NavLink to="/admin">Quản trị</NavLink>}
           </nav>
           <div className="user">
             <span title={user.role === 'admin' ? 'Quản trị viên' : 'Người xem'}>{user.email}</span>
