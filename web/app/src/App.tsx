@@ -1,5 +1,6 @@
 import { Suspense, lazy } from 'react';
-import { Link, Outlet, Route, Routes } from 'react-router-dom';
+import { Link, Outlet, Route, Routes, useLocation } from 'react-router-dom';
+import { RequireAdmin } from './admin/RequireAdmin';
 import { RequireAuth } from './auth';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Header } from './components/Header';
@@ -11,13 +12,19 @@ import { VideoPage } from './pages/VideoPage';
 
 // Trang xem tải lazy: hls.js (~500 kB) chỉ được tải khi người dùng mở player.
 const WatchPage = lazy(() => import('./pages/WatchPage').then((m) => ({ default: m.WatchPage })));
+// Trang quản trị (M7) tải lazy: người xem không phải tải code admin.
+const AdminVideosPage = lazy(() => import('./admin/AdminVideosPage').then((m) => ({ default: m.AdminVideosPage })));
+const AdminUploadPage = lazy(() => import('./admin/AdminUploadPage').then((m) => ({ default: m.AdminUploadPage })));
+const AdminVideoPage = lazy(() => import('./admin/AdminVideoPage').then((m) => ({ default: m.AdminVideoPage })));
 
 function Layout() {
+  const { pathname } = useLocation();
   return (
     <>
       <Header />
       <main className="content">
-        <ErrorBoundary>
+        {/* resetKey: sang trang khác thì bỏ trạng thái lỗi của trang trước */}
+        <ErrorBoundary resetKey={pathname}>
           <Suspense fallback={<p className="status">Đang tải…</p>}>
             <Outlet />
           </Suspense>
@@ -52,6 +59,18 @@ export function App() {
         <Route path="search" element={<SearchPage />} />
         <Route path="videos/:id" element={<VideoPage />} />
         <Route path="watch/:id" element={<WatchPage />} />
+        <Route
+          path="admin"
+          element={
+            <RequireAdmin>
+              <Outlet />
+            </RequireAdmin>
+          }
+        >
+          <Route index element={<AdminVideosPage />} />
+          <Route path="upload" element={<AdminUploadPage />} />
+          <Route path="videos/:id" element={<AdminVideoPage />} />
+        </Route>
       </Route>
       <Route path="*" element={<NotFound />} />
     </Routes>

@@ -1,8 +1,14 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
+interface Props {
+  children: ReactNode;
+  // resetKey đổi (Layout truyền pathname) thì bỏ trạng thái lỗi: lỗi của một trang không chặn các trang khác.
+  resetKey?: unknown;
+}
+
 // ErrorBoundary bọc các route tải lazy: sau khi deploy bản mới, chunk cũ không còn trên server nên
 // import() lỗi; hiện thông báo và nút tải lại thay vì trang trắng.
-export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+export class ErrorBoundary extends Component<Props, { failed: boolean }> {
   state = { failed: false };
 
   static getDerivedStateFromError() {
@@ -11,6 +17,10 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: 
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('route render failed', error, info.componentStack);
+  }
+
+  componentDidUpdate(prev: Props) {
+    if (this.state.failed && prev.resetKey !== this.props.resetKey) this.setState({ failed: false });
   }
 
   render() {
