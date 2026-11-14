@@ -14,8 +14,9 @@ services:
       interval: 5s
       retries: 20
 
+  # minio/minio trên Docker Hub không còn tải được; dùng Chainguard, ghim digest.
   minio:
-    image: cgr.dev/chainguard/minio:latest-dev
+    image: cgr.dev/chainguard/minio:latest-dev@sha256:5735e8125c4af7dd310dc5780508bfb850f0b68783a1a56089b5c64316a8f603
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY}
@@ -28,7 +29,7 @@ services:
       retries: 20
 
   minio-init:
-    image: cgr.dev/chainguard/minio-client:latest-dev
+    image: cgr.dev/chainguard/minio-client:latest-dev@sha256:e1f3f37e8b13f34be49494f441ca01ff7be4e05d7cf04bf26681b0fe380852e1
     depends_on:
       minio: { condition: service_healthy }
     entrypoint: >
@@ -69,7 +70,7 @@ services:
     entrypoint: >
       /bin/sh -c "
       for t in video.uploaded video.uploaded.dlq video.processing video.transcoded video.failed playback.events app.logs; do
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic $$t --partitions 3 --replication-factor 1;
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic $$t --partitions 3 --replication-factor 1 || exit 1;
       done
       "
     restart: "no"
