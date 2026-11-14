@@ -1,6 +1,6 @@
 # API
 
-Base URL local: `http://localhost:8000`. Body và response là JSON. Lỗi có dạng `{"error": "…"}`.
+Base URL local: `http://localhost:8088` (qua nginx, cùng origin với web — [ADR 0011](decisions/0011-same-origin-nginx-gateway.md)) hoặc trực tiếp `http://localhost:8000`. Body và response là JSON. Lỗi có dạng `{"error": "…"}`.
 
 Xác thực bằng cookie `sf_session` (JWT HS256, `HttpOnly`, `SameSite=Lax`, 24 giờ) do `/api/auth/register` hoặc `/api/auth/login` đặt. Quyền: **public** không cần cookie; **user** cần đăng nhập (thiếu/sai/hết hạn → `401`); **admin** cần role `admin` (chưa đăng nhập → `401`, viewer → `403`).
 
@@ -11,7 +11,8 @@ Xác thực bằng cookie `sf_session` (JWT HS256, `HttpOnly`, `SameSite=Lax`, 2
 | POST | `/api/auth/login` | public | Đăng nhập, đặt cookie |
 | POST | `/api/auth/logout` | public | Xoá cookie |
 | GET | `/api/me` | user | Thông tin user |
-| GET | `/api/videos?page=` | user | Catalog video `ready`, 20 video/trang |
+| GET | `/api/videos?q=&genre=&year=&page=` | user | Catalog và tìm kiếm video `ready`, 20 video/trang |
+| GET | `/api/genres` | user | Các thể loại của video `ready` |
 | GET | `/api/videos/{id}` | user | Chi tiết video `ready` |
 | GET | `/api/videos/{id}/play` | user | URL ký để phát (hạn 2 giờ) |
 | POST | `/api/admin/videos` | admin | Tạo video, nhận presigned multipart upload |
@@ -44,14 +45,27 @@ Body như register. `200` + cookie, body như trên. `401 {"error":"invalid emai
 
 ## GET /api/videos
 
-`?page=2` (1–1000, mặc định 1) → `200`:
+Tham số (đều tuỳ chọn):
+
+| Tham số | Ý nghĩa |
+|---|---|
+| `q` | Từ khoá, tối đa 100 ký tự, có dấu hoặc không dấu, cú pháp websearch (`"cụm từ"`, `-loại`, `or`). Rỗng = duyệt catalog |
+| `genre` | Lọc đúng một thể loại (giá trị lấy từ `/api/genres`), tối đa 50 ký tự |
+| `year` | Lọc theo năm, 1888–2100 |
+| `page` | 1–1000, mặc định 1 |
+
+Sai giới hạn → `400`; `q`/`genre` chứa UTF-8 không hợp lệ hoặc byte NUL cũng bị `400`. Ví dụ `?q=tro+choi&genre=H%C3%A0nh+%C4%91%E1%BB%99ng&page=2` → `200`:
 
 ```json
 {"videos":[{"id":"7c1e…","title":"Phim A","description":"","genres":["drama"],"year":2024,
   "duration_s":30,"created_at":"2026-11-14T10:00:00Z"}],"page":2,"has_more":false}
 ```
 
-Chỉ video `ready`, mới nhất trước. Tìm kiếm `q` và lọc `genre` có ở M4 (M3 bỏ qua).
+Chỉ video `ready`. Không có `q`: mới nhất trước. Có `q`: xếp theo độ liên quan (`ts_rank`, khớp tiêu đề trước mô tả); nếu full-text không ra kết quả nào thì dùng trigram trên tiêu đề để chịu lỗi gõ ("tro chpi" vẫn ra "Trò chơi …") — [ADR 0012](decisions/0012-search-unaccent-trigram.md).
+
+## GET /api/genres
+
+`200`: `{"genres":["Gia đình","Hành động"]}` — các thể loại (không trùng, đã sắp xếp) của video `ready`; `[]` khi chưa có.
 
 ## GET /api/videos/{id}
 
@@ -66,7 +80,7 @@ Chỉ video `ready`, mới nhất trước. Tìm kiếm `q` và lọc `genre` c�
  "expires_at":"2026-11-15T12:00:00Z","subtitles":[],"resume_at":0}
 ```
 
-`url` hết hạn sau 2 giờ; playlist con và segment dùng chung chữ ký. nginx trả `403` khi chữ ký sai hoặc hết hạn: gọi lại `/play`. `subtitles` luôn `[]` và `resume_at` luôn `0` tới M5. `404` nếu không có hoặc chưa `ready`.
+`url` hết hạn sau 2 giờ; playlist con và segment dùng chung chữ ký. nginx trả `403` khi chữ ký sai hoặc hết hạn: gọi lại `/play` (player của web tự làm và phát tiếp từ vị trí hiện tại). `subtitles` luôn `[]` và `resume_at` luôn `0` tới M5. `404` nếu không có hoặc chưa `ready`.
 
 ## POST /api/admin/videos
 

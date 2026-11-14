@@ -4,12 +4,15 @@
 
 | Lệnh | Việc |
 |---|---|
-| `make up` / `make down` | Dựng (build lại image api/transcoder) / tắt toàn bộ stack |
+| `make up` / `make down` | Dựng (build lại image api/transcoder/nginx kèm web) / tắt toàn bộ stack |
 | `make ps` / `make logs` | Trạng thái / log mọi container |
-| `make logs-app` | Log của `api` và `transcoder` |
+| `make logs-app` | Log của `api`, `transcoder` và `nginx` |
 | `make seed-admin` | Tạo/đặt lại admin `ADMIN_EMAIL` / `ADMIN_PASSWORD` (trong `.env`) bên trong container api |
 | `make e2e-m2` | E2E: đăng nhập admin, upload `tmp/sample.mp4` → đợi `ready` → kiểm tra HLS qua URL ký |
 | `make e2e-m3` | E2E: 401/403, register/login/logout, `/play`, URL ký → 200, sửa chữ ký / hết hạn / traversal → 403 (chạy kèm `e2e-m2`) |
+| `make e2e-m4` | E2E: SPA và fallback route qua nginx, `/api/` cùng origin (cookie), upload video tiêu đề tiếng Việt, tìm không dấu / có dấu / gõ sai / lọc thể loại, `/play` cùng origin |
+| `make web-install` / `make web-test` / `make web-build` | `npm ci` / Vitest / build production cho `web/app` (cần Node 20.19+) |
+| `make web-dev` | Vite dev server http://localhost:5173 (hot reload), proxy `/api` và `/cdn` sang nginx `:8088` (cần `make up`) |
 | `make sign-url ID=…` | In URL CDN đã ký (2 giờ) cho video `ID` (dòng đầu là URL, dòng sau là thời điểm hết hạn), dùng với dev player hoặc video từ `make transcode` |
 | `make sample` | Sinh `tmp/sample.mp4` |
 | `make build` | Build `bin/api`, `bin/transcoder` |
@@ -24,8 +27,11 @@ Xoá sạch dữ liệu: `docker compose -f deploy/docker-compose.yml down -v`.
 
 | Dịch vụ | Địa chỉ | Đăng nhập |
 |---|---|---|
-| api | http://localhost:8000 (`/healthz`) | cookie sau `POST /api/auth/login`; admin: `ADMIN_EMAIL` / `ADMIN_PASSWORD` |
+| **Web người xem** | http://localhost:8088 | admin: `ADMIN_EMAIL` / `ADMIN_PASSWORD`, hoặc tự đăng ký viewer |
+| api qua nginx | http://localhost:8088/api/… | cookie sau `POST /api/auth/login` |
+| api trực tiếp | http://localhost:8000 (`/healthz`) | như trên (dùng cho script, debug) |
 | nginx "CDN" | http://localhost:8088/cdn/s/{sig}/{exp}/hls/{id}/… | chỉ URL ký |
+| Vite dev server | http://localhost:5173 (`make web-dev`) | như web người xem |
 | Dev player | http://localhost:8088/dev/player.html?src={URL ký, đã URL-encode} | |
 | MinIO API (presigned URL) | http://localhost:9000 | bucket `hls` đọc ẩn danh trong dev ([ADR 0002](decisions/0002-dev-hls-bucket-read.md)) |
 | MinIO Console | http://localhost:9001 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` trong `.env` |
@@ -58,6 +64,17 @@ Xoá sạch dữ liệu: `docker compose -f deploy/docker-compose.yml down -v`.
 | `CDN_BASE_URL` | `http://localhost:8088` | Tiền tố của URL trong `/play` |
 
 Các giá trị trong `.env.example` chỉ dành cho dev local và đã nằm trong repo: phải sinh secret và mật khẩu mới cho bất kỳ môi trường nào ngoài máy local. Đổi `CDN_SIGNING_SECRET` thì chạy lại `make up` để nginx và api cùng nhận giá trị mới; URL đã phát trước đó thành `403`.
+
+## Phát triển web (M4)
+
+Mã nguồn ở `web/app` (React 18 + Vite + TypeScript, hls.js, react-router). Lần đầu: `make web-install`.
+
+- **Sửa giao diện:** `make up` (backend) rồi `make web-dev`, mở http://localhost:5173. Vite proxy `/api` và `/cdn` sang nginx `:8088` nên cookie và URL ký hoạt động như bản thật.
+- **Test:** `make web-test` (Vitest + Testing Library: debounce ô tìm kiếm, lưới phim, form đăng nhập, logic gọi lại `/play` của player). Player phát thật kiểm tra tay trên Chrome và Safari: mở `/watch/{id}`, đổi chất lượng, tua.
+- **Bản chạy ở :8088** là bản build trong image `streamfilm-nginx:dev`; sau khi sửa `web/app` chạy lại `make up` để build lại.
+- Thêm/sửa dependency: `cd web/app && npm install --save-exact <pkg>@<version>` và commit `package-lock.json` (Docker build dùng `npm ci`).
+
+Kiểm tra player tự lấy lại URL khi hết hạn (bằng tay): đang xem thì đổi `CDN_SIGNING_SECRET` trong `.env` và `make up` (URL cũ thành `403`) — player gọi lại `/play` và phát tiếp từ vị trí cũ.
 
 ## Theo dõi Kafka
 
@@ -97,6 +114,10 @@ Lần đầu `MISS`, các lần sau `HIT`.
 | `/api/admin/*` trả `403` | Tài khoản là viewer; dùng admin của `make seed-admin` |
 | URL ký trả `403` | Hết hạn 2 giờ (gọi lại `/play`), URL bị sửa, hoặc `CDN_SIGNING_SECRET` của api và nginx khác nhau (chạy lại `make up`) |
 | `http://localhost:8088/hls/...` trả `404` | Đúng thiết kế từ M3: chỉ còn đường `/cdn/s/...` có chữ ký |
+| `http://localhost:8088/api/...` trả `502` | api chưa chạy hoặc đang khởi động lại: `make ps`, `make logs-app` |
+| Web hiện bản cũ sau khi sửa `web/app` | Bản ở `:8088` là image build sẵn: chạy lại `make up`, hoặc dùng `make web-dev` |
+| Web báo "Không tải được video" | `/play` lỗi (video chưa `ready`, hết phiên) hoặc URL ký liên tục `403` (`CDN_SIGNING_SECRET` của api và nginx khác nhau): xem tab Network và `make logs-app` |
+| Tìm "tro choi" không ra video vừa upload | Video chưa `ready`, hoặc api chưa chạy migration `0003_search` (xem `schema_migrations`) |
 | Video kẹt ở `queued` | `transcoder` không chạy hoặc lag: `make ps`, `make logs-app`, tab Consumer Groups |
 | Video `failed` | Xem `fail_reason` qua `GET /api/admin/videos?status=failed` và message trong DLQ |
 | `make run-api` báo cổng 8000 đã dùng | Dừng service `api` trong compose trước |

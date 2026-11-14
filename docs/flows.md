@@ -104,5 +104,10 @@ sequenceDiagram
   P->>N: GET /cdn/s/{sig}/{exp}/hls/{id}/720p/index.m3u8, …/720p/seg_000.ts (đường dẫn tương đối)
   N-->>P: 200 (X-Cache-Status: MISS lần đầu, HIT sau đó)
   Note over P,N: Sửa sig, đổi exp, dùng sig của video khác hoặc quá exp → nginx 403
-  Note over P,API: Player gặp 403 thì gọi lại /play và phát tiếp (web M4, chưa có)
+  Note over P,N: Sau 2 giờ (hoặc chữ ký sai) nginx trả 403
+  P->>API: GET /api/videos/{id}/play (PlaybackSession.refresh, một lần dù nhiều lỗi cùng lúc)
+  API-->>P: URL ký mới
+  P->>N: nạp lại master.m3u8, phát tiếp từ currentTime
 ```
+
+Web gọi `/api/...` và tải `/cdn/...` qua cùng một origin (nginx `:8088`), nên cookie `sf_session` đi kèm request API mà không cần CORS ([ADR 0011](decisions/0011-same-origin-nginx-gateway.md)). Quá 3 lần lấy lại URL trong 60 giây thì player dừng và báo lỗi.

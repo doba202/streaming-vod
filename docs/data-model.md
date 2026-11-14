@@ -1,8 +1,8 @@
 # Data model
 
-## Postgres (tới M3)
+## Postgres (tới M4)
 
-Migration nằm trong `migrations/*.sql`, nhúng vào binary `api` và tự chạy khi khởi động (bảng `schema_migrations` ghi version đã áp). Cột `search` (M4), `subtitles` và `watch_progress` (M5) được thêm bằng migration của giai đoạn đó.
+Migration nằm trong `migrations/*.sql`, nhúng vào binary `api` và tự chạy khi khởi động (bảng `schema_migrations` ghi version đã áp). `subtitles` và `watch_progress` (M5) được thêm bằng migration của giai đoạn đó.
 
 ```sql
 users (                    -- M3, migrations/0002_users.sql
@@ -17,13 +17,16 @@ videos (
   upload_id text,          -- id multipart upload trên S3 (thêm so với spec)
   size_bytes bigint,       -- kích thước khai báo khi tạo, dùng tính số part (thêm so với spec)
   hls_prefix text, poster_key text, sprite_key text,
+  search tsvector,         -- M4, migrations/0003_search.sql: unaccent(title) trọng số A + unaccent(description) B, trigger cập nhật
   created_at timestamptz, updated_at timestamptz
 )
 renditions (video_id uuid fk on delete cascade, height int, bitrate_kbps int, playlist_key text,
             pk(video_id, height))
 ```
 
-Index: `videos(created_at desc)`, `videos(status, created_at)`.
+Index: `videos(created_at desc)`, `videos(status, created_at)`, GIN `videos(search)`, GIN `pg_trgm` trên `immutable_unaccent(title)`.
+
+Hàm (M4): `immutable_unaccent(text)` — bản `IMMUTABLE` của `unaccent` (extension `unaccent`, `pg_trgm`); `videos_search_tsv(title, description)`; trigger `videos_search_update` (`BEFORE INSERT OR UPDATE OF title, description`). Truy vấn tìm kiếm: [ADR 0012](decisions/0012-search-unaccent-trigram.md).
 
 ## Trạng thái video
 
