@@ -34,11 +34,12 @@ func TestRouterAuthz(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := newRouter(log, routes{
-		Tokens: tokens,
-		Auth:   &auth.Handler{Svc: &auth.Service{Tokens: tokens}, Log: log},
-		Viewer: &catalog.ViewerHandler{Videos: emptyStore{}, Log: log},
-		Upload: &upload.Handler{Log: log},
-		Admin:  &catalog.AdminHandler{Videos: emptyStore{}, Log: log},
+		Tokens:    tokens,
+		Auth:      &auth.Handler{Svc: &auth.Service{Tokens: tokens}, Log: log},
+		Viewer:    &catalog.ViewerHandler{Videos: emptyStore{}, Log: log},
+		Upload:    &upload.Handler{Log: log},
+		Admin:     &catalog.AdminHandler{Videos: emptyStore{}, Log: log},
+		Subtitles: &catalog.SubtitleHandler{Log: log},
 	})
 	admin, _, _ := tokens.Issue(auth.Identity{UserID: "a", Role: auth.RoleAdmin})
 	viewer, _, _ := tokens.Issue(auth.Identity{UserID: "v", Role: auth.RoleViewer})
@@ -60,6 +61,9 @@ func TestRouterAuthz(t *testing.T) {
 		{"POST", "/api/admin/videos", viewer, 403},
 		{"POST", "/api/admin/videos/11111111-1111-1111-1111-111111111111/complete", viewer, 403},
 		{"POST", "/api/admin/videos/11111111-1111-1111-1111-111111111111/retry", "", 401},
+		{"POST", "/api/admin/videos/11111111-1111-1111-1111-111111111111/subtitles", "", 401},
+		{"POST", "/api/admin/videos/11111111-1111-1111-1111-111111111111/subtitles", viewer, 403},
+		{"POST", "/api/admin/videos/11111111-1111-1111-1111-111111111111/subtitles", admin, 400}, // không phải multipart
 		{"GET", "/api/admin/videos", admin, 200},
 		{"GET", "/api/admin/videos", "not-a-jwt", 401},
 		{"GET", "/api/me", "", 401},

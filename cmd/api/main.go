@@ -97,11 +97,12 @@ func run(log *slog.Logger) error {
 
 	authSvc := &auth.Service{Users: auth.NewRepo(pool), Tokens: tokens, NewID: uuid.NewString}
 	handler := newRouter(log, routes{
-		Tokens: tokens,
-		Auth:   &auth.Handler{Svc: authSvc, SecureCookie: cfg.CookieSecure, Log: log},
-		Viewer: &catalog.ViewerHandler{Videos: repo, Signer: signer, CDNBaseURL: cfg.CDNBaseURL, Log: log},
-		Upload: &upload.Handler{Svc: svc, Log: log},
-		Admin:  &catalog.AdminHandler{Videos: repo, Log: log},
+		Tokens:    tokens,
+		Auth:      &auth.Handler{Svc: authSvc, SecureCookie: cfg.CookieSecure, Log: log},
+		Viewer:    &catalog.ViewerHandler{Videos: repo, Signer: signer, CDNBaseURL: cfg.CDNBaseURL, Log: log},
+		Upload:    &upload.Handler{Svc: svc, Log: log},
+		Admin:     &catalog.AdminHandler{Videos: repo, Log: log},
+		Subtitles: &catalog.SubtitleHandler{Videos: repo, Objects: store, BucketHLS: cfg.BucketHLS, Log: log},
 	})
 
 	updater := &catalog.StatusUpdater{Store: repo, Log: log}

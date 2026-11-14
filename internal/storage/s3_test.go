@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/testcontainers/testcontainers-go"
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 )
@@ -65,5 +67,25 @@ func TestUploadDirAndDownload(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(dest); string(b) != "segment" {
 		t.Errorf("downloaded %q", b)
+	}
+
+	// PutObject ghi đè và giữ Content-Type (nginx trả nguyên header này cho <track>).
+	for _, body := range []string{"WEBVTT\n\nold", "WEBVTT\n\nnew"} {
+		if err := s.PutObject(ctx, "hls", "vid1/subs/vi.vtt", "text/vtt", []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	head, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String("hls"), Key: aws.String("vid1/subs/vi.vtt")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ct := aws.ToString(head.ContentType); ct != "text/vtt" {
+		t.Errorf("content type = %q", ct)
+	}
+	if err := s.Download(ctx, "hls", "vid1/subs/vi.vtt", dest); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(dest); string(b) != "WEBVTT\n\nnew" {
+		t.Errorf("after overwrite %q", b)
 	}
 }

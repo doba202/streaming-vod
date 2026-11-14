@@ -14,11 +14,12 @@ import (
 )
 
 type routes struct {
-	Tokens *auth.Tokens
-	Auth   *auth.Handler
-	Viewer *catalog.ViewerHandler
-	Upload *upload.Handler
-	Admin  *catalog.AdminHandler
+	Tokens    *auth.Tokens
+	Auth      *auth.Handler
+	Viewer    *catalog.ViewerHandler
+	Upload    *upload.Handler
+	Admin     *catalog.AdminHandler
+	Subtitles *catalog.SubtitleHandler
 }
 
 // newRouter: public (/healthz, /api/auth/*), user (/api/me, /api/videos/*), admin (/api/admin/*).
@@ -35,6 +36,7 @@ func newRouter(log *slog.Logger, rt routes) http.Handler {
 		r.Use(auth.RequireAdmin)
 		rt.Upload.Routes(r)
 		rt.Admin.Routes(r)
+		rt.Subtitles.Routes(r)
 	})
 	return r
 }

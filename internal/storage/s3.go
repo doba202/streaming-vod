@@ -2,6 +2,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -89,6 +90,20 @@ func (s *Store) UploadDir(ctx context.Context, bucket, prefix, dir string) (int,
 		return nil
 	})
 	return count, err
+}
+
+// PutObject ghi một object nhỏ (ví dụ phụ đề .vtt) từ bộ nhớ, ghi đè nếu đã có.
+func (s *Store) PutObject(ctx context.Context, bucket, key, contentType string, body []byte) error {
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(body),
+		ContentType: aws.String(contentType),
+	})
+	if err != nil {
+		return fmt.Errorf("put %s: %w", key, err)
+	}
+	return nil
 }
 
 func (s *Store) Download(ctx context.Context, bucket, key, dest string) error {
