@@ -1,8 +1,17 @@
 # Data model
 
-## Postgres (tới M5)
+## Postgres
 
-Migration nằm trong `migrations/*.sql`, nhúng vào binary `api` và tự chạy khi khởi động (bảng `schema_migrations` ghi version đã áp).
+Migration nằm trong `migrations/*.sql`, nhúng vào binary `api` và tự chạy khi khởi động (bảng `schema_migrations` ghi version đã áp, [ADR 0005](decisions/0005-embedded-migrations.md)):
+
+| File | Giai đoạn | Nội dung |
+|---|---|---|
+| `0001_videos.sql` | M2 | `videos`, `renditions`, index theo `created_at` và `(status, created_at)` |
+| `0002_users.sql` | M3 | `users` |
+| `0003_search.sql` | M4 | extension `unaccent`, `pg_trgm`; hàm `immutable_unaccent`, `videos_search_tsv`; cột `videos.search` + trigger; index GIN |
+| `0004_subtitles_progress.sql` | M5 | `subtitles`, `watch_progress` |
+
+M7 không thêm migration: sửa metadata ghi các cột có sẵn, xoá video dựa vào `ON DELETE CASCADE` của các bảng con.
 
 ```sql
 users (                    -- M3, migrations/0002_users.sql
@@ -48,8 +57,12 @@ stateDiagram-v2
   queued --> failed: video.failed
   processing --> failed: video.failed
   failed --> queued: /retry
-  uploading --> [*]: dọn sau 24 giờ
+  uploading --> [*]: dọn sau 24 giờ / DELETE
+  ready --> [*]: DELETE
+  failed --> [*]: DELETE
 ```
+
+`DELETE /api/admin/videos/{id}` (M7) không phải chuyển trạng thái mà xoá dòng; video `queued`/`processing` bị từ chối (`409`, [ADR 0020](decisions/0020-video-delete-and-edit.md)). `PATCH` không đổi `status`.
 
 Mọi chuyển trạng thái đi qua `catalog.CanTransition` trong cùng transaction với `SELECT … FOR UPDATE`. Chuyển không hợp lệ (sự kiện trùng hoặc đến muộn) bị bỏ qua và ghi log. Một trường hợp đặc biệt: `video.processing` và `video.transcoded` nằm ở hai topic khác nhau nên `video.transcoded` có thể đến khi video còn `queued`; khi đó api đi `queued → processing → ready` (máy trạng thái không đổi). Ngoại lệ duy nhất: khi publish `video.uploaded` lỗi, `queued` được trả về trạng thái trước đó (bước bù trừ).
 
@@ -121,4 +134,6 @@ SETTINGS non_replicated_deduplication_window = 1000;
 - `app_logs`: `time` của dòng log → `ts`; `level`, `msg`, `service`, `request_id`, `video_id` thành cột (thiếu thì chuỗi rỗng); mọi trường còn lại thành JSON trong `attrs` (đọc bằng `JSONExtractString(attrs, 'path')`, `JSONExtractInt(attrs, 'status')`…). Giữ 30 ngày.
 - Giờ lưu UTC; analytics gửi dạng `YYYY-MM-DD hh:mm:ss.sss`.
 
-SQL mẫu: `scripts/analytics/*.sql` (chạy bằng `make analytics-sql`, xem [operations](operations.md#analytics-và-log-m6)).
+SQL mẫu: `scripts/analytics/*.sql` (chạy bằng `make analytics-sql`, xem [operations](operations.md#analytics-và-log-m6)). `completion_rate.sql` gom theo (video, user) trước: người có `ended` nhưng mất `play` (best-effort) không được tính, nên tỉ lệ luôn trong [0, 1].
+
+Xoá video (M7) không xoá row ClickHouse: lịch sử phân tích được giữ.

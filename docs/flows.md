@@ -1,6 +1,6 @@
 # Các luồng
 
-Chỉ gồm các luồng đã chạy (tới M6).
+Chỉ gồm các luồng đã chạy (tới M7).
 
 ## Upload và transcode
 
@@ -36,6 +36,59 @@ sequenceDiagram
   K->>API: video.transcoded → renditions, duration_s, status ready
 ```
 
+## Upload từ trang admin (M7)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Trình duyệt (/admin/upload)
+  participant N as nginx (cổng 8088)
+  participant API as api
+  participant S3 as MinIO (cổng 9000)
+  B->>N: POST /api/admin/videos {title, genres, year, filename, size_bytes} (cookie admin)
+  N->>API: proxy
+  API-->>B: 201 {id, upload: {part_size, parts[{part_number, url}]}}
+  par tối đa 3 part cùng lúc
+    B->>S3: OPTIONS presigned url (Origin: http://localhost:8088)
+    S3-->>B: 204 Access-Control-Allow-Origin (MINIO_CORS_ALLOW_ORIGIN)
+    B->>S3: PUT part (XMLHttpRequest, upload.onprogress → thanh tiến độ)
+    Note over B,S3: lỗi mạng/5xx/408/429 → chờ 0,5 s, 1 s rồi thử lại, tối đa 3 lần/part (4xx khác không thử lại); hết lượt → huỷ các part đang gửi, cho admin xoá video dở; nút "Huỷ upload" cũng xoá video dở
+  end
+  B->>N: POST /api/admin/videos/{id}/complete
+  N->>API: ListParts, CompleteMultipartUpload, queued, video.uploaded
+  API-->>B: 200 {status: queued}
+  B->>B: chuyển tới /admin/videos/{id}
+  loop mỗi 3 giây khi queued/processing
+    B->>N: GET /api/admin/videos/{id}
+  end
+  Note over B: ready → nút "Xem phim"; failed → fail_reason + nút "Thử lại"
+```
+
+ETag của từng part không cần đọc (api tự `ListParts`), nên MinIO không phải expose header nào ([ADR 0019](decisions/0019-admin-browser-upload.md)).
+
+## Sửa và xoá video (M7)
+
+```mermaid
+sequenceDiagram
+  participant A as Admin
+  participant API as api
+  participant PG as Postgres
+  participant S3 as MinIO
+  A->>API: PATCH /api/admin/videos/{id} {title?, description?, genres?, year?}
+  API->>PG: SELECT video; gộp field; NormalizeMetadata
+  API->>PG: UPDATE title, description, genres, year (trigger tính lại search)
+  API-->>A: 200 video
+  A->>API: DELETE /api/admin/videos/{id}
+  API->>PG: BEGIN; SELECT … FOR UPDATE
+  alt queued / processing
+    API-->>A: 409 video is being processed
+  else uploading / ready / failed
+    API->>PG: DELETE videos (cascade renditions, subtitles, watch_progress); COMMIT
+    API->>S3: AbortMultipartUpload (nếu uploading), xoá raw/{id}/, hls/{id}/ (lỗi chỉ log)
+    API-->>A: 204
+  end
+```
+
 ## Retry và DLQ
 
 ```mermaid
@@ -50,7 +103,7 @@ sequenceDiagram
   T->>K: video.uploaded.dlq {payload, error, attempts: 4}
   T->>K: commit offset
   K->>API: video.failed → status failed, fail_reason
-  Note over API: Admin gọi POST /{id}/retry: failed → queued, publish lại video.uploaded
+  Note over API: Admin bấm "Thử lại" (/admin) = POST /{id}/retry: failed → queued, publish lại video.uploaded
 ```
 
 Lỗi không sửa được bằng thử lại (file không có video stream) đi thẳng tới `video.failed` + DLQ với `attempts: 1`. Message hỏng (không phải JSON, thiếu `video_id`/`raw_key`, hoặc `video_id` không phải UUID dạng chuẩn) đi thẳng vào DLQ với `attempts: 0`.

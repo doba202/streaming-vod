@@ -22,7 +22,11 @@ Xác thực bằng cookie `sf_session` (JWT HS256, `HttpOnly`, `SameSite=Lax`, 2
 | POST | `/api/admin/videos/{id}/complete` | admin | Báo upload xong, đưa vào hàng đợi transcode |
 | POST | `/api/admin/videos/{id}/retry` | admin | Đưa video `failed` về `queued` |
 | GET | `/api/admin/videos?status=&limit=` | admin | Danh sách video mới nhất trước (`limit` 1–200, mặc định 50) |
-| GET | `/api/admin/videos/{id}` | admin | Chi tiết video kèm `renditions` |
+| GET | `/api/admin/videos/{id}` | admin | Chi tiết video kèm `renditions`, `subtitles` |
+| PATCH | `/api/admin/videos/{id}` | admin | Sửa `title`, `description`, `genres`, `year` (M7) |
+| DELETE | `/api/admin/videos/{id}` | admin | Xoá video, rendition, phụ đề, tiến độ xem và object trên MinIO (M7) |
+
+Trang quản trị trên web (`/admin`, M7) dùng đúng các endpoint admin ở trên.
 
 ## POST /api/auth/register
 
@@ -126,7 +130,7 @@ curl -b admin.jar -F lang=vi -F 'label=Tiếng Việt' -F file=@phim.vi.srt \
 {"title":"Phim A","description":"","genres":["drama"],"year":2024,"filename":"movie.mp4","size_bytes":157286400}
 ```
 
-`filename` phải kết thúc bằng `.mp4`, `.mov`, `.mkv` hoặc `.webm`. `size_bytes` từ 1 tới 10 GB.
+`filename` phải kết thúc bằng `.mp4`, `.mov`, `.mkv` hoặc `.webm`. `size_bytes` từ 1 tới 10 GB. Metadata được chuẩn hoá như `PATCH` (cắt khoảng trắng, bỏ thể loại rỗng/trùng) và kiểm tra cùng giới hạn: `title` 1–200 ký tự, `description` ≤ 5000, tối đa 10 `genres` mỗi cái ≤ 50 ký tự, `year` 0 (không rõ) hoặc 1888–2100.
 
 `201`:
 
@@ -137,9 +141,9 @@ curl -b admin.jar -F lang=vi -F 'label=Tiếng Việt' -F file=@phim.vi.srt \
  "expires_at":"2026-11-14T11:00:00Z"}}
 ```
 
-Client cắt file thành các khúc `part_size` byte (khúc cuối nhỏ hơn) và `PUT` khúc thứ n vào `url` của `part_number` n. Không cần gửi lại ETag: API tự liệt kê part khi complete.
+Client cắt file thành các khúc `part_size` byte (khúc cuối nhỏ hơn) và `PUT` khúc thứ n vào `url` của `part_number` n. Không cần gửi lại ETag: API tự liệt kê part khi complete. Từ trình duyệt, `PUT` là cross-origin tới MinIO: origin của trang phải nằm trong `MINIO_CORS_ALLOW_ORIGIN` ([ADR 0019](decisions/0019-admin-browser-upload.md)).
 
-Lỗi: `400` body sai / thiếu `title` / kích thước hoặc đuôi file không hợp lệ.
+Lỗi: `400` body sai / metadata vượt giới hạn / kích thước hoặc đuôi file không hợp lệ.
 
 ## POST /api/admin/videos/{id}/complete
 
@@ -154,7 +158,7 @@ Không có body. `200`: `{"id":"7c1e…","status":"queued"}`.
 
 ## POST /api/admin/videos/{id}/retry
 
-Không có body. `200`: `{"id":"7c1e…","status":"queued"}`. `409` nếu video không ở `failed`, `404`, `503` như trên.
+Không có body. `200`: `{"id":"7c1e…","status":"queued"}`. `409` nếu video không ở `failed`, `404`, `503` như trên. `fail_reason` cũ được giữ tới khi video `ready` (ghi đè nếu lỗi lại).
 
 ## GET /api/admin/videos
 
@@ -176,5 +180,36 @@ Không có body. `200`: `{"id":"7c1e…","status":"queued"}`. `409` nếu video 
 {"id":"7c1e…","title":"Phim A","description":"","genres":["drama"],"year":2024,"status":"ready",
  "duration_s":30,"size_bytes":157286400,"hls_prefix":"7c1e…/",
  "created_at":"…","updated_at":"…",
- "renditions":[{"height":1080,"bitrate_kbps":5000,"playlist_key":"7c1e…/1080p/index.m3u8"}]}
+ "renditions":[{"height":1080,"bitrate_kbps":5000,"playlist_key":"7c1e…/1080p/index.m3u8"}],
+ "subtitles":[{"lang":"vi","label":"Tiếng Việt","vtt_key":"7c1e…/subs/vi.vtt"}]}
 ```
+
+`subtitles` sắp theo `lang`, `[]` khi chưa có. `404` nếu không có video hoặc `{id}` không phải UUID.
+
+## PATCH /api/admin/videos/{id}
+
+Gửi field cần đổi; field vắng giữ nguyên. `"year": 0` xoá năm, `"genres": []` xoá thể loại. Dùng được ở mọi trạng thái (kể cả đang transcode).
+
+```json
+{"title":"Hạ cánh nơi anh","genres":["Tình cảm","drama"],"year":2019}
+```
+
+`200`: video như `GET /api/admin/videos` (không kèm `renditions`, `subtitles`). Tìm kiếm thấy tiêu đề/mô tả mới ngay (trigger cập nhật cột `search`).
+
+| Mã | Khi nào |
+|---|---|
+| `400` | `{}` (`nothing to update`), JSON sai hoặc có field lạ (ví dụ `status`), metadata vượt giới hạn như khi tạo video |
+| `404` | Không có video hoặc `{id}` không phải UUID |
+
+Hai admin sửa cùng lúc: bản ghi sau thắng ([ADR 0020](decisions/0020-video-delete-and-edit.md)).
+
+## DELETE /api/admin/videos/{id}
+
+Không có body. `204` khi video ở `uploading`, `ready` hoặc `failed`: xoá dòng `videos` (cascade `renditions`, `subtitles`, `watch_progress`), rồi huỷ multipart upload dở (nếu còn `uploading`) và xoá `raw/{id}/`, `hls/{id}/` trên MinIO. Lỗi MinIO chỉ ghi log (`delete objects after delete failed`), vẫn `204`.
+
+| Mã | Khi nào |
+|---|---|
+| `409` | Video đang `queued` hoặc `processing` (`video is being processed: video is queued`): đợi `ready`/`failed` rồi xoá |
+| `404` | Không có video (kể cả đã xoá) hoặc `{id}` không phải UUID |
+
+Sau khi xoá, `/play` và `/api/videos/{id}` trả `404`; segment đã nằm trong cache nginx có thể còn phục vụ cho URL ký cũ tới khi hết hạn ([ADR 0020](decisions/0020-video-delete-and-edit.md)).
