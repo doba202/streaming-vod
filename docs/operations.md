@@ -76,6 +76,25 @@ Mã nguồn ở `web/app` (React 18 + Vite + TypeScript, hls.js, react-router). 
 
 Kiểm tra player tự lấy lại URL khi hết hạn (bằng tay): đang xem thì đổi `CDN_SIGNING_SECRET` trong `.env` và `make up` (URL cũ thành `403`) — player gọi lại `/play` và phát tiếp từ vị trí cũ.
 
+## Phụ đề, poster và xem tiếp (M5)
+
+- Upload phụ đề: xem `docs/api.md` (`POST /api/admin/videos/{id}/subtitles`). File phải là UTF-8; SRT xuất từ phần mềm cũ thường là Windows-1258/1252 → chuyển trước: `iconv -f WINDOWS-1258 -t UTF-8 phim.srt > phim.utf8.srt`.
+- Xem tiến độ của mọi user:
+
+```bash
+docker compose -f deploy/docker-compose.yml --env-file .env exec postgres psql -U streamfilm -c \
+  "select u.email, w.video_id, w.position_s, w.duration_s, w.updated_at from watch_progress w join users u on u.id = w.user_id order by w.updated_at desc limit 10"
+```
+
+- Đọc `playback.events` (đến M6 chưa có consumer; Redpanda Console → Topics → `playback.events` cũng xem được):
+
+```bash
+docker compose -f deploy/docker-compose.yml --env-file .env exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server kafka:9092 --topic playback.events --from-beginning --timeout-ms 5000
+```
+
+- Thử Kafka chết: `make e2e-m5 KAFKA_DOWN=1` (dừng kafka, gửi sự kiện — vẫn `204`, tiến độ vẫn ghi — rồi bật lại). Log api có `playback event dropped`.
+
 ## Theo dõi Kafka
 
 - Redpanda Console → **Topics** → chọn topic → tab Messages: xem key (`video_id`) và JSON.
@@ -117,6 +136,11 @@ Lần đầu `MISS`, các lần sau `HIT`.
 | `http://localhost:8088/api/...` trả `502` | api chưa chạy hoặc đang khởi động lại: `make ps`, `make logs-app` |
 | Web hiện bản cũ sau khi sửa `web/app` | Bản ở `:8088` là image build sẵn: chạy lại `make up`, hoặc dùng `make web-dev` |
 | Web báo "Không tải được video" | `/play` lỗi (video chưa `ready`, hết phiên) hoặc URL ký liên tục `403` (`CDN_SIGNING_SECRET` của api và nginx khác nhau): xem tab Network và `make logs-app` |
+| Thẻ phim hiện khối màu thay vì poster | Video transcode trước M5 (không có `poster_key`): transcode lại bằng cách upload lại; hoặc trang mở quá 1–2 giờ nên URL poster đã hết hạn (tải lại trang) |
+| Không có ảnh xem trước khi tua | `/play` không có `thumbnails_url` (video trước M5) hoặc tải `thumbnails.vtt` lỗi: xem tab Network |
+| Upload phụ đề `400 subtitle: file must be UTF-8 text` | Chuyển mã file sang UTF-8 (xem mục M5 ở trên) |
+| Phụ đề không hiện | Chọn phụ đề trong menu CC của player; kiểm tra `/play` có `subtitles` và URL `.vtt` trả `200 text/vtt` |
+| Hàng "Xem tiếp" trống | Mới xem < 5% hoặc đã ≥ 95% thời lượng, hoặc chưa có heartbeat (cần phát ≥ 10 giây, hoặc pause) |
 | Tìm "tro choi" không ra video vừa upload | Video chưa `ready`, hoặc api chưa chạy migration `0003_search` (xem `schema_migrations`) |
 | Video kẹt ở `queued` | `transcoder` không chạy hoặc lag: `make ps`, `make logs-app`, tab Consumer Groups |
 | Video `failed` | Xem `fail_reason` qua `GET /api/admin/videos?status=failed` và message trong DLQ |

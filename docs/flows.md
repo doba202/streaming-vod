@@ -96,7 +96,7 @@ sequenceDiagram
   participant S3 as MinIO
   P->>API: GET /api/videos/{id}/play (cookie)
   API->>API: user đã đăng nhập? video ready? exp = now + 2h, sig = md5("{exp}/hls/{id}/ secret")
-  API-->>P: {url: http://localhost:8088/cdn/s/{sig}/{exp}/hls/{id}/master.m3u8, expires_at, subtitles: [], resume_at: 0}
+  API-->>P: {url: …/cdn/s/{sig}/{exp}/hls/{id}/master.m3u8, expires_at, subtitles: [{lang,label,url}], thumbnails_url, resume_at}
   P->>N: GET …/master.m3u8
   N->>N: secure_link_md5 → hợp lệ
   N->>S3: GET /hls/{id}/master.m3u8 (cache)
@@ -110,4 +110,37 @@ sequenceDiagram
   P->>N: nạp lại master.m3u8, phát tiếp từ currentTime
 ```
 
+Phụ đề (`…/subs/{lang}.vtt`, thẻ `<track>`), `thumbnails.vtt` và các tấm sprite cũng nằm dưới `/hls/{id}/` nên dùng chung chữ ký và cũng được lấy lại khi gọi lại `/play`.
+
 Web gọi `/api/...` và tải `/cdn/...` qua cùng một origin (nginx `:8088`), nên cookie `sf_session` đi kèm request API mà không cần CORS ([ADR 0011](decisions/0011-same-origin-nginx-gateway.md)). Quá 3 lần lấy lại URL trong 60 giây thì player dừng và báo lỗi.
+
+## Xem tiếp và sự kiện xem (M5)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant P as Player (PlaybackReporter)
+  participant API as api
+  participant PG as Postgres
+  participant K as Kafka
+  participant H as Trang chủ
+  P->>API: POST /api/playback/events {video_id, type: play, position_s, bitrate_kbps}
+  API->>PG: video ready? (catalog.Repo.Get)
+  API-)K: playback.events (nền, BestEffort, key user_id)
+  API-->>P: 204
+  loop mỗi 10 giây khi đang phát
+    P->>API: heartbeat {position_s}
+    API->>PG: UPSERT watch_progress (user_id, video_id, position_s, duration_s)
+    API-)K: playback.events
+    API-->>P: 204
+  end
+  Note over P,API: pause / ended cũng ghi watch_progress; seek / play / buffering chỉ vào Kafka
+  Note over API,K: Kafka chết: publish hết 2 giây thì log và bỏ; quá 256 publish đang chờ thì bỏ ngay — request vẫn 204
+  P->>API: rời trang (pagehide / chuyển trang): heartbeat vị trí cuối, fetch keepalive
+  H->>API: GET /api/me/continue-watching
+  API->>PG: watch_progress WHERE user_id AND 5% < pos/dur < 95% ORDER BY updated_at DESC LIMIT 20
+  API->>PG: videos ready theo id (poster_url ký)
+  API-->>H: {videos: [..., position_s, watched_at]}
+  H->>API: bấm thẻ → /watch/{id} → GET /play
+  API->>PG: resume_at = position_s (0 nếu ≥ 95%)
+```

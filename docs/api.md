@@ -14,7 +14,10 @@ Xác thực bằng cookie `sf_session` (JWT HS256, `HttpOnly`, `SameSite=Lax`, 2
 | GET | `/api/videos?q=&genre=&year=&page=` | user | Catalog và tìm kiếm video `ready`, 20 video/trang |
 | GET | `/api/genres` | user | Các thể loại của video `ready` |
 | GET | `/api/videos/{id}` | user | Chi tiết video `ready` |
-| GET | `/api/videos/{id}/play` | user | URL ký để phát (hạn 2 giờ) |
+| GET | `/api/videos/{id}/play` | user | URL ký để phát (hạn 2 giờ), phụ đề, thumbnails, `resume_at` |
+| GET | `/api/me/continue-watching` | user | Hàng "Xem tiếp" (tối đa 20) |
+| POST | `/api/playback/events` | user | Sự kiện xem (heartbeat 10 giây, play/pause/seek/ended/buffering) |
+| POST | `/api/admin/videos/{id}/subtitles` | admin | Upload phụ đề `.srt`/`.vtt` (multipart `lang`, `label`, `file`) |
 | POST | `/api/admin/videos` | admin | Tạo video, nhận presigned multipart upload |
 | POST | `/api/admin/videos/{id}/complete` | admin | Báo upload xong, đưa vào hàng đợi transcode |
 | POST | `/api/admin/videos/{id}/retry` | admin | Đưa video `failed` về `queued` |
@@ -61,6 +64,8 @@ Sai giới hạn → `400`; `q`/`genre` chứa UTF-8 không hợp lệ hoặc by
   "duration_s":30,"created_at":"2026-11-14T10:00:00Z"}],"page":2,"has_more":false}
 ```
 
+Từ M5 mỗi video có thêm `poster_url` (URL ký `…/cdn/s/{sig}/{exp}/hls/{id}/poster.jpg`, `exp` làm tròn theo giờ nên URL ổn định để trình duyệt cache); video transcode trước M5 không có trường này.
+
 Chỉ video `ready`. Không có `q`: mới nhất trước. Có `q`: xếp theo độ liên quan (`ts_rank`, khớp tiêu đề trước mô tả); nếu full-text không ra kết quả nào thì dùng trigram trên tiêu đề để chịu lỗi gõ ("tro chpi" vẫn ra "Trò chơi …") — [ADR 0012](decisions/0012-search-unaccent-trigram.md).
 
 ## GET /api/genres
@@ -77,10 +82,43 @@ Chỉ video `ready`. Không có `q`: mới nhất trước. Có `q`: xếp theo 
 
 ```json
 {"url":"http://localhost:8088/cdn/s/H23K0bGijtyB6JSJpoVT1g/1794736800/hls/7c1e…/master.m3u8",
- "expires_at":"2026-11-15T12:00:00Z","subtitles":[],"resume_at":0}
+ "expires_at":"2026-11-15T12:00:00Z",
+ "subtitles":[{"lang":"en","label":"English","url":"http://localhost:8088/cdn/s/H23K…/1794736800/hls/7c1e…/subs/en.vtt"},
+              {"lang":"vi","label":"Tiếng Việt","url":"http://localhost:8088/cdn/s/H23K…/1794736800/hls/7c1e…/subs/vi.vtt"}],
+ "thumbnails_url":"http://localhost:8088/cdn/s/H23K…/1794736800/hls/7c1e…/thumbnails.vtt",
+ "resume_at":42}
 ```
 
-`url` hết hạn sau 2 giờ; playlist con và segment dùng chung chữ ký. nginx trả `403` khi chữ ký sai hoặc hết hạn: gọi lại `/play` (player của web tự làm và phát tiếp từ vị trí hiện tại). `subtitles` luôn `[]` và `resume_at` luôn `0` tới M5. `404` nếu không có hoặc chưa `ready`.
+`url` hết hạn sau 2 giờ; playlist con, segment, phụ đề, `thumbnails.vtt` và các tấm sprite dùng chung chữ ký thư mục. nginx trả `403` khi chữ ký sai hoặc hết hạn: gọi lại `/play` (player của web tự làm và phát tiếp từ vị trí hiện tại). `subtitles` sắp theo `lang`, `[]` khi chưa có. `thumbnails_url` không có với video transcode trước M5. `resume_at` = vị trí đã lưu của user (giây), `0` nếu chưa xem hoặc đã xem ≥ 95%. `404` nếu không có hoặc chưa `ready`.
+
+## GET /api/me/continue-watching
+
+`200` (`Cache-Control: no-store`): tối đa 20 video `ready` mà user đang xem dở (`5% < position_s/duration_s < 95%`), mới xem nhất trước. Mỗi phần tử như catalog, thêm `position_s` và `watched_at`:
+
+```json
+{"videos":[{"id":"7c1e…","title":"Phim A","description":"","genres":["drama"],"duration_s":30,
+  "created_at":"2026-11-15T10:00:00Z","poster_url":"http://localhost:8088/cdn/s/…/poster.jpg",
+  "position_s":12,"watched_at":"2026-11-15T10:05:00Z"}]}
+```
+
+## POST /api/playback/events
+
+```json
+{"video_id":"7c1e…","type":"heartbeat","position_s":12.4,"bitrate_kbps":2800,"buffering_ms":0}
+```
+
+`type`: `play`, `pause`, `seek`, `ended`, `buffering`, `heartbeat`. `position_s` 0–172800 (số thực, làm tròn xuống giây và kẹp theo thời lượng video), `bitrate_kbps` 0–100000, `buffering_ms` 0–600000. `heartbeat`, `pause`, `ended` ghi `watch_progress`; mọi loại được publish lên `playback.events`. `204` kể cả khi Kafka không khả dụng (sự kiện bị bỏ và ghi log). `400` input sai, `404` video không có hoặc chưa `ready`.
+
+## POST /api/admin/videos/{id}/subtitles
+
+`multipart/form-data`: `lang` (`^[a-z]{2,3}(-[A-Z]{2})?$`, ví dụ `vi`, `en`, `pt-BR`), `label` (1–50 ký tự, ví dụ `Tiếng Việt`), `file` (`.srt` hoặc `.vtt`, UTF-8, ≤ 1 MiB).
+
+```bash
+curl -b admin.jar -F lang=vi -F 'label=Tiếng Việt' -F file=@phim.vi.srt \
+  http://localhost:8088/api/admin/videos/7c1e…/subtitles
+```
+
+`201`: `{"lang":"vi","label":"Tiếng Việt","vtt_key":"7c1e…/subs/vi.vtt"}`. Upload lại cùng `lang` thì ghi đè (file và nhãn). `400` lang/label sai, thiếu file, đuôi khác `.srt`/`.vtt`, không phải UTF-8, SRT hỏng (thông báo có số dòng) hoặc VTT thiếu header; `413` file > 1 MiB; `404` video không tồn tại. `{id}` phải là UUID hợp lệ (dạng chuẩn; id không hợp lệ cũng `404`) và các trường `lang`, `label` chỉ đọc từ form (không nhận qua query string). Admin có thể upload phụ đề cho video chưa `ready` (đang `queued`/`processing`): phụ đề được lưu ngay và chỉ xuất hiện trong `/play` khi video `ready`.
 
 ## POST /api/admin/videos
 

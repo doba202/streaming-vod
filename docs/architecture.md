@@ -19,7 +19,7 @@ flowchart LR
   N -->|"/cdn/s/… secure_link_md5 hợp lệ"| S3
 ```
 
-Phần đã chạy tới M4: `api` (đăng ký/đăng nhập, catalog, tìm kiếm không dấu và `/play` cho người xem, upload và danh sách video cho admin, consumer trạng thái, job dọn upload bỏ dở), `transcoder worker`, Postgres, Kafka, MinIO, nginx (cổng vào duy nhất: SPA, proxy API, CDN ký URL), web người xem `web/app`. Chưa có: xem tiếp, poster/sprite và phụ đề (M5), analytics (M6), trang admin (M7).
+Phần đã chạy tới M5: `api` (đăng ký/đăng nhập, catalog, tìm kiếm không dấu, `/play` kèm phụ đề / thumbnails / `resume_at`, hàng "Xem tiếp", nhận sự kiện xem, upload video và phụ đề cho admin, consumer trạng thái, job dọn upload bỏ dở), `transcoder worker` (HLS + poster + sprite), Postgres, Kafka, MinIO, nginx (cổng vào duy nhất: SPA, proxy API, CDN ký URL), web người xem `web/app`. Chưa có: analytics service và ClickHouse (M6 — `playback.events` đã được publish), trang admin (M7).
 
 ## api
 
@@ -29,6 +29,8 @@ Phần đã chạy tới M4: `api` (đăng ký/đăng nhập, catalog, tìm ki�
 | `internal/catalog` | Repository `videos` / `renditions`, máy trạng thái, `GET /api/admin/videos[/{id}]`, `GET /api/videos[/{id}]` (tìm kiếm `q`, lọc `genre`/`year`), `GET /api/genres` và `/play` cho người xem (chỉ video `ready`), consumer `video.processing` / `video.transcoded` / `video.failed` (group `api`) |
 | `internal/auth` | Bảng `users`, bcrypt, JWT HS256 trong cookie `sf_session`, `/api/auth/register|login|logout`, `/api/me`, middleware `Authenticate` / `RequireUser` / `RequireAdmin`, lệnh `api seed-admin` |
 | `internal/signing` | Ký đường dẫn `/cdn/s/{sig}/{exp}/hls/{id}/…` đúng công thức `secure_link_md5` của nginx; từ chối tên file không an toàn (rỗng, bắt đầu bằng `/`, chứa `..`, `?`, `#`, `\` hoặc khoảng trắng) |
+| `internal/playback` | `POST /api/playback/events`: kiểm tra sự kiện, upsert `watch_progress` (heartbeat/pause/ended), publish `playback.events` qua `BestEffort` (nền, giới hạn 256 publish đang chờ, timeout 2 giây, lỗi thì log và bỏ); `Repo` đọc tiến độ cho `resume_at` và "Xem tiếp" ([ADR 0015](decisions/0015-playback-events-best-effort.md)) |
+| `internal/subtitle` | Chuyển SRT → WebVTT, chuẩn hoá VTT (BOM, CRLF, kiểm tra UTF-8) cho `POST /api/admin/videos/{id}/subtitles` (handler ở `catalog`, [ADR 0014](decisions/0014-subtitles-srt-to-vtt.md)) |
 | `internal/events` | Topic, schema JSON, producer/consumer franz-go |
 | `internal/db`, `migrations/` | Kết nối pgx, migration SQL nhúng, chạy khi api khởi động |
 
@@ -53,6 +55,8 @@ Chế độ `transcoder file -in … -id …` của M1 vẫn dùng được đ�
 | Encode | Một lần chạy FFmpeg: `split` + `scale` cho mọi bậc, H.264 `veryfast` main, AAC stereo |
 | Keyframe | `-force_key_frames expr:gte(t,n_forced*2)` và `-sc_threshold 0`: keyframe đúng mỗi 2 giây ở mọi bậc |
 | Đóng gói | HLS VOD, segment 6 giây MPEG-TS, `master.m3u8` + `{bậc}/index.m3u8` |
+| Poster (M5) | Lần chạy FFmpeg thứ hai: một frame ở 10% thời lượng, rộng 640 px → `poster.jpg` |
+| Sprite (M5) | Lần chạy thứ ba: `select` một frame mỗi 10 giây, thu về 160×90 (giữ tỉ lệ, viền đen), `tile=10x10` → `sprite_001.jpg`, `sprite_002.jpg`… (100 ô/tấm), kèm `thumbnails.vtt` (`sprite_NNN.jpg#xywh=x,y,w,h`) — [ADR 0013](decisions/0013-thumbnails-sprite-sheets.md) |
 
 ## Ngữ nghĩa xử lý Kafka
 
@@ -63,11 +67,18 @@ Chế độ `transcoder file -in … -id …` của M1 vẫn dùng được đ�
 
 ## Web người xem và nginx
 
-`web/app` là SPA React 18 + Vite + TypeScript, router `react-router-dom`, player `hls.js` (Safari dùng HLS gốc). Trang: `/login`, `/register`, `/` (phim mới), `/search?q=&genre=` (debounce 300 ms, trạng thái nằm trên URL), `/videos/{id}` (chi tiết), `/watch/{id}` (player, tải lazy cùng hls.js). Poster là khối màu tạm tới M5.
+`web/app` là SPA React 18 + Vite + TypeScript, router `react-router-dom`, player `hls.js` (Safari dùng HLS gốc). Trang: `/login`, `/register`, `/` (phim mới), `/search?q=&genre=` (debounce 300 ms, trạng thái nằm trên URL), `/videos/{id}` (chi tiết), `/watch/{id}` (player, tải lazy cùng hls.js). Poster là ảnh `poster.jpg` qua URL ký; video transcode trước M5 (hoặc ảnh lỗi) hiện khối màu như cũ. Trang chủ có hàng "Xem tiếp" (tối đa 20 video đang xem dở, thanh tiến độ, bấm vào là phát tiếp).
 
 nginx là cổng vào duy nhất ở http://localhost:8088 ([ADR 0011](decisions/0011-same-origin-nginx-gateway.md)): `/` phục vụ bản build của SPA (route không phải file → `index.html`), `/api/` proxy nguyên URI tới `api:8000`, `/cdn/` là CDN ký URL. Cùng origin nên cookie `sf_session` (HttpOnly) tự đi kèm mọi `fetch`, không cần CORS. Image `streamfilm-nginx:dev` build SPA trong Docker (`deploy/docker/nginx.Dockerfile`).
 
 Player: gọi `/play`, nạp URL ký vào hls.js. Lỗi `403` (URL hết hạn hoặc sai) hay lỗi mạng fatal → `PlaybackSession.refresh()` gọi lại `/play` và phát tiếp từ `currentTime`; nhiều lỗi cùng lúc chỉ gọi `/play` một lần, quá 3 lần trong 60 giây thì báo lỗi (`web/app/src/player/recovery.ts`). Lỗi media fatal → `hls.recoverMediaError()` (lần 2 gọi thêm `swapAudioCodec()`, lần 3 báo lỗi; đếm lại khi phát tiến triển). Route tải lazy được bọc `ErrorBoundary` để chunk cũ sau khi deploy hiện nút "Tải lại" thay vì trang trắng.
+
+## Ảnh xem trước, phụ đề và xem tiếp (M5)
+
+- **Poster:** `GET /api/videos` và `/api/videos/{id}` trả `poster_url` ký bằng `Signer.StablePath` — `exp` làm tròn xuống theo giờ nên URL giống hệt nhau trong một giờ và trình duyệt cache được; hạn còn lại 1–2 giờ, không vượt TTL 2 giờ ([ADR 0013](decisions/0013-thumbnails-sprite-sheets.md)).
+- **Sprite khi tua:** `/play` trả `thumbnails_url`. Player tải `thumbnails.vtt`, resolve đường dẫn sprite theo URL của chính file VTT (vẫn dưới prefix ký) và hiện thanh tua phụ `SeekPreview` dưới video: rê chuột hiện ô sprite (`background-position`) và mốc thời gian, bấm hoặc ←/→ để tua. Thanh điều khiển gốc của `<video>` giữ nguyên.
+- **Phụ đề:** admin upload `.srt`/`.vtt` (≤ 1 MiB, UTF-8) qua `POST /api/admin/videos/{id}/subtitles`; api chuyển SRT → VTT, ghi `hls/{id}/subs/{lang}.vtt` (Content-Type `text/vtt`) và upsert bảng `subtitles`. `/play` trả `subtitles: [{lang,label,url}]` với URL ký; player thêm `<track kind="subtitles">`. nginx không cache `subs/` để bản upload lại có hiệu lực ngay ([ADR 0014](decisions/0014-subtitles-srt-to-vtt.md)).
+- **Sự kiện xem và "Xem tiếp":** `PlaybackReporter` (web) gửi `play`, `pause`, `seek`, `ended`, `buffering` (thời gian chờ) và `heartbeat` mỗi 10 giây khi đang phát; rời trang thì gửi heartbeat vị trí cuối (`fetch` `keepalive`). api ghi `watch_progress` cho heartbeat/pause/ended, publish mọi sự kiện lên `playback.events` (key `user_id`) ở nền — Kafka chết thì sự kiện bị bỏ, request vẫn `204` ([ADR 0015](decisions/0015-playback-events-best-effort.md)). "Xem tiếp" = `5% < position/duration < 95%`, mới xem nhất trước, tối đa 20; `resume_at` = vị trí đã lưu (0 nếu chưa xem hoặc đã xem ≥ 95%).
 
 ## Tìm kiếm
 
@@ -88,6 +99,10 @@ raw/{id}/source.{mp4|mov|mkv|webm}   (upload multipart từ client)
 hls/{id}/master.m3u8
 hls/{id}/{1080p|720p|480p|360p}/index.m3u8
 hls/{id}/{1080p|720p|480p|360p}/seg_000.ts …
+hls/{id}/poster.jpg                    (M5, 640 px, frame ở 10% thời lượng)
+hls/{id}/sprite_001.jpg …              (M5, 1600×900, 10×10 ô 160×90, một ô mỗi 10 giây)
+hls/{id}/thumbnails.vtt                (M5, chỉ mục ô sprite theo thời gian)
+hls/{id}/subs/{lang}.vtt               (M5, phụ đề do admin upload, ghi đè khi upload lại)
 ```
 
 ## Đối chiếu với kiến trúc Hygraph
