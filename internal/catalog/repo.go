@@ -1,0 +1,225 @@
+package catalog
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var (
+	ErrNotFound          = errors.New("video not found")
+	ErrInvalidTransition = errors.New("invalid status transition")
+)
+
+type Video struct {
+	ID, Title, Description string
+	Genres                 []string
+	Year                   int // 0 = không rõ
+	Status                 Status
+	FailReason             string // lý do lỗi gần nhất; xoá khi video ready
+	DurationS              int
+	RawKey, UploadID       string
+	SizeBytes              int64
+	HLSPrefix              string
+	CreatedAt, UpdatedAt   time.Time
+}
+
+type Rendition struct {
+	Height      int    `json:"height"`
+	BitrateKbps int    `json:"bitrate_kbps"`
+	PlaylistKey string `json:"playlist_key"`
+}
+
+type ReadyInfo struct {
+	DurationS  int
+	HLSPrefix  string
+	Renditions []Rendition
+}
+
+type ListFilter struct {
+	Status Status // rỗng = mọi trạng thái
+	Limit  int    // <= 0 hoặc > 200 thì dùng 50
+}
+
+type Repo struct {
+	pool *pgxpool.Pool
+}
+
+func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
+
+const videoColumns = `id::text, title, description, genres, COALESCE(year, 0), status,
+	COALESCE(fail_reason, ''), COALESCE(duration_s, 0), raw_key, COALESCE(upload_id, ''),
+	size_bytes, COALESCE(hls_prefix, ''), created_at, updated_at`
+
+func scanVideo(row pgx.Row) (Video, error) {
+	var v Video
+	var status string
+	err := row.Scan(&v.ID, &v.Title, &v.Description, &v.Genres, &v.Year, &status,
+		&v.FailReason, &v.DurationS, &v.RawKey, &v.UploadID, &v.SizeBytes, &v.HLSPrefix,
+		&v.CreatedAt, &v.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Video{}, ErrNotFound
+	}
+	v.Status = Status(status)
+	return v, err
+}
+
+// Create thêm video mới ở trạng thái uploading.
+func (r *Repo) Create(ctx context.Context, v Video) error {
+	if v.Genres == nil {
+		v.Genres = []string{}
+	}
+	_, err := r.pool.Exec(ctx, `INSERT INTO videos
+		(id, title, description, genres, year, status, raw_key, upload_id, size_bytes)
+		VALUES ($1, $2, $3, $4, NULLIF($5, 0), 'uploading', $6, NULLIF($7, ''), $8)`,
+		v.ID, v.Title, v.Description, v.Genres, v.Year, v.RawKey, v.UploadID, v.SizeBytes)
+	if err != nil {
+		return fmt.Errorf("insert video: %w", err)
+	}
+	return nil
+}
+
+func (r *Repo) Get(ctx context.Context, id string) (Video, error) {
+	return scanVideo(r.pool.QueryRow(ctx, `SELECT `+videoColumns+` FROM videos WHERE id = $1`, id))
+}
+
+func (r *Repo) List(ctx context.Context, f ListFilter) ([]Video, error) {
+	if f.Limit <= 0 || f.Limit > 200 {
+		f.Limit = 50
+	}
+	rows, err := r.pool.Query(ctx, `SELECT `+videoColumns+` FROM videos
+		WHERE ($1 = '' OR status = $1) ORDER BY created_at DESC LIMIT $2`, string(f.Status), f.Limit)
+	if err != nil {
+		return nil, err
+	}
+	return collectVideos(rows)
+}
+
+func collectVideos(rows pgx.Rows) ([]Video, error) {
+	defer rows.Close()
+	var out []Video
+	for rows.Next() {
+		v, err := scanVideo(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repo) Renditions(ctx context.Context, id string) ([]Rendition, error) {
+	rows, err := r.pool.Query(ctx, `SELECT height, bitrate_kbps, playlist_key FROM renditions
+		WHERE video_id = $1 ORDER BY height DESC`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Rendition
+	for rows.Next() {
+		var rd Rendition
+		if err := rows.Scan(&rd.Height, &rd.BitrateKbps, &rd.PlaylistKey); err != nil {
+			return nil, err
+		}
+		out = append(out, rd)
+	}
+	return out, rows.Err()
+}
+
+// transition khoá dòng (FOR UPDATE), kiểm tra máy trạng thái, đổi status và chạy apply trong cùng transaction.
+// Trả về trạng thái trước khi đổi.
+func (r *Repo) transition(ctx context.Context, id string, to Status, apply func(pgx.Tx) error) (Status, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+
+	var cur string
+	err = tx.QueryRow(ctx, `SELECT status FROM videos WHERE id = $1 FOR UPDATE`, id).Scan(&cur)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	from := Status(cur)
+	if !CanTransition(from, to) {
+		return from, fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, from, to)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE videos SET status = $2, updated_at = now() WHERE id = $1`,
+		id, string(to)); err != nil {
+		return from, err
+	}
+	if apply != nil {
+		if err := apply(tx); err != nil {
+			return from, err
+		}
+	}
+	return from, tx.Commit(ctx)
+}
+
+func (r *Repo) Transition(ctx context.Context, id string, to Status) (Status, error) {
+	return r.transition(ctx, id, to, nil)
+}
+
+// MarkReady: processing → ready, ghi thời lượng, prefix HLS và thay toàn bộ rendition.
+func (r *Repo) MarkReady(ctx context.Context, id string, info ReadyInfo) (Status, error) {
+	return r.transition(ctx, id, StatusReady, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE videos SET duration_s = $2, hls_prefix = $3, fail_reason = NULL
+			WHERE id = $1`, id, info.DurationS, info.HLSPrefix); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM renditions WHERE video_id = $1`, id); err != nil {
+			return err
+		}
+		for _, rd := range info.Renditions {
+			if _, err := tx.Exec(ctx, `INSERT INTO renditions (video_id, height, bitrate_kbps, playlist_key)
+				VALUES ($1, $2, $3, $4)`, id, rd.Height, rd.BitrateKbps, rd.PlaylistKey); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// MarkFailed: queued|processing → failed, ghi lý do.
+func (r *Repo) MarkFailed(ctx context.Context, id, reason string) (Status, error) {
+	return r.transition(ctx, id, StatusFailed, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE videos SET fail_reason = $2 WHERE id = $1`, id, reason)
+		return err
+	})
+}
+
+// RevertQueued là bước bù trừ (không thuộc máy trạng thái): khi đã đặt queued nhưng publish
+// video.uploaded thất bại thì trả video về trạng thái trước đó (uploading hoặc failed).
+func (r *Repo) RevertQueued(ctx context.Context, id string, to Status) error {
+	_, err := r.pool.Exec(ctx, `UPDATE videos SET status = $2, updated_at = now()
+		WHERE id = $1 AND status = 'queued'`, id, string(to))
+	return err
+}
+
+func (r *Repo) ListStaleUploading(ctx context.Context, before time.Time) ([]Video, error) {
+	rows, err := r.pool.Query(ctx, `SELECT `+videoColumns+` FROM videos
+		WHERE status = 'uploading' AND created_at < $1 ORDER BY created_at LIMIT 100`, before)
+	if err != nil {
+		return nil, err
+	}
+	return collectVideos(rows)
+}
+
+// DeleteUploading xoá video chỉ khi còn ở trạng thái uploading; ngược lại trả ErrNotFound.
+func (r *Repo) DeleteUploading(ctx context.Context, id string) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM videos WHERE id = $1 AND status = 'uploading'`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
