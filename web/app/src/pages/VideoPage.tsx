@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ApiError, api, type Video } from '../api';
-import { formatDuration, posterHue } from '../format';
+import { Poster } from '../components/Poster';
+import { formatDuration } from '../format';
 
 export function VideoPage() {
   const { id = '' } = useParams();
@@ -28,9 +29,7 @@ export function VideoPage() {
   if (!video) return <p className="status">Đang tải…</p>;
   return (
     <article className="detail">
-      <div className="poster large" style={{ background: `hsl(${posterHue(video.id)} 45% 30%)` }} aria-hidden="true">
-        {video.title.charAt(0).toUpperCase()}
-      </div>
+      <Poster video={video} large />
       <div>
         <h1>{video.title}</h1>
         <p className="meta">{[video.year, formatDuration(video.duration_s)].filter(Boolean).join(' · ')}</p>

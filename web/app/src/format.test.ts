@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDuration, posterHue } from './format';
+import { formatDuration, posterHue, progressPercent } from './format';
 
 describe('formatDuration', () => {
   it('định dạng phút:giây và giờ:phút:giây', () => {
@@ -16,5 +16,15 @@ describe('posterHue', () => {
     expect(h).toBe(posterHue('11111111-1111-1111-1111-111111111111'));
     expect(h).toBeGreaterThanOrEqual(0);
     expect(h).toBeLessThan(360);
+  });
+});
+
+describe('progressPercent', () => {
+  it('làm tròn và kẹp trong 0..100', () => {
+    expect(progressPercent(42, 100)).toBe(42);
+    expect(progressPercent(10, 30)).toBe(33);
+    expect(progressPercent(150, 100)).toBe(100);
+    expect(progressPercent(-5, 100)).toBe(0);
+    expect(progressPercent(10, 0)).toBe(0);
   });
 });

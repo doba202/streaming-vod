@@ -23,7 +23,15 @@ export interface Video {
   year?: number;
   duration_s: number;
   created_at: string;
+  // URL ký (/cdn/s/...) của poster.jpg; không có với video transcode trước M5.
+  poster_url?: string;
   renditions?: Rendition[];
+}
+
+// Một video của hàng "Xem tiếp" (GET /api/me/continue-watching).
+export interface ContinueVideo extends Video {
+  position_s: number;
+  watched_at: string;
 }
 
 export interface VideoPage {
@@ -42,7 +50,20 @@ export interface PlayInfo {
   url: string;
   expires_at: string;
   subtitles: Subtitle[];
+  // thumbnails.vtt (sprite xem trước khi tua); không có với video transcode trước M5.
+  thumbnails_url?: string;
   resume_at: number;
+}
+
+export type PlaybackEventType = 'play' | 'pause' | 'seek' | 'ended' | 'buffering' | 'heartbeat';
+
+// Body của POST /api/playback/events (spec §4.4).
+export interface PlaybackEvent {
+  video_id: string;
+  type: PlaybackEventType;
+  position_s: number;
+  bitrate_kbps: number;
+  buffering_ms: number;
 }
 
 export interface VideoQuery {
@@ -112,4 +133,23 @@ export const api = {
   video: (id: string) => request<Video>(`/api/videos/${encodeURIComponent(id)}`),
   play: (id: string) => request<PlayInfo>(`/api/videos/${encodeURIComponent(id)}/play`),
   genres: () => request<{ genres: string[] }>('/api/genres').then((r) => r.genres),
+  continueWatching: () =>
+    request<{ videos: ContinueVideo[] }>('/api/me/continue-watching').then((r) => r.videos),
 };
+
+// sendPlaybackEvent gửi sự kiện xem và không chờ kết quả: lỗi (mạng, 401, Kafka chết phía server) bị bỏ qua
+// để không bao giờ ảnh hưởng việc xem. keepalive: request vẫn đi khi tab đang đóng (pagehide).
+// Không qua request() nên 401 ở đây không đẩy người dùng về trang đăng nhập giữa lúc đang xem.
+export function sendPlaybackEvent(ev: PlaybackEvent): void {
+  try {
+    void fetch('/api/playback/events', {
+      method: 'POST',
+      credentials: 'same-origin',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ev),
+    }).catch(() => undefined);
+  } catch {
+    // fetch có thể ném đồng bộ (ví dụ vượt hạn mức keepalive 64 KB): bỏ qua
+  }
+}

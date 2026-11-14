@@ -8,7 +8,13 @@ export function formatDuration(totalSeconds: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
 }
 
-// posterHue: màu ổn định theo id cho poster tạm (poster thật có ở M5).
+// progressPercent: phần trăm đã xem (0–100, làm tròn) cho thanh tiến độ của hàng "Xem tiếp".
+export function progressPercent(positionS: number, durationS: number): number {
+  if (!durationS || durationS <= 0) return 0;
+  return Math.round(Math.min(Math.max(positionS / durationS, 0), 1) * 100);
+}
+
+// posterHue: màu ổn định theo id cho poster tạm (video transcode trước M5 hoặc ảnh không tải được).
 export function posterHue(id: string): number {
   let h = 0;
   for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) % 360;

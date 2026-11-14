@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { api, type Video } from '../api';
+import { api, type ContinueVideo, type Video } from '../api';
+import { ContinueRow } from '../components/ContinueRow';
 import { VideoGrid } from '../components/VideoGrid';
 
 export function HomePage() {
@@ -8,6 +9,19 @@ export function HomePage() {
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [continueVideos, setContinueVideos] = useState<ContinueVideo[]>([]);
+
+  // Hàng "Xem tiếp": lỗi thì chỉ ẩn hàng, không chặn catalog.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .continueWatching()
+      .then((vs) => !cancelled && setContinueVideos(vs))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,6 +43,7 @@ export function HomePage() {
 
   return (
     <section>
+      <ContinueRow videos={continueVideos} />
       <h1>Phim mới</h1>
       {error && <p role="alert" className="form-error">{error}</p>}
       {!loading || videos.length > 0 ? <VideoGrid videos={videos} /> : <p className="status">Đang tải…</p>}
