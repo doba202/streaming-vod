@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"streamfilm/internal/events"
@@ -65,6 +66,11 @@ func (w *Worker) Handle(ctx context.Context, rec *kgo.Record) error {
 	ev, err := events.Decode[events.VideoUploaded](rec.Value)
 	if err == nil && ev.RawKey == "" {
 		err = errors.New("decode event: missing raw_key")
+	}
+	if err == nil {
+		if parsed, perr := uuid.Parse(ev.VideoID); perr != nil || parsed.String() != ev.VideoID {
+			err = errors.New("decode event: invalid video_id")
+		}
 	}
 	if err != nil {
 		w.Log.Error("bad video.uploaded message, sending to DLQ", "partition", rec.Partition, "offset", rec.Offset, "err", err)

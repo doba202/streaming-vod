@@ -95,9 +95,11 @@ func newHarness(t *testing.T, errs ...error) *harness {
 	return h
 }
 
+const testVID = "0b9f6c1e-3c5a-4d2e-9a77-5f1d2c3b4a5e"
+
 func uploadedRecord(t *testing.T) *kgo.Record {
 	t.Helper()
-	rec, err := events.NewRecord(events.TopicVideoUploaded, events.VideoUploaded{VideoID: "vid-1", RawKey: "vid-1/source.mp4"})
+	rec, err := events.NewRecord(events.TopicVideoUploaded, events.VideoUploaded{VideoID: testVID, RawKey: testVID + "/source.mp4"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,15 +114,15 @@ func TestHandleSuccess(t *testing.T) {
 	if got := h.pub.topics(); !reflect.DeepEqual(got, []string{events.TopicVideoProcessing, events.TopicVideoTranscoded}) {
 		t.Fatalf("topics = %v", got)
 	}
-	want := events.VideoTranscoded{VideoID: "vid-1", DurationS: 30, HLSPrefix: "vid-1/", Renditions: []events.Rendition{
-		{Height: 720, BitrateKbps: 2800, PlaylistKey: "vid-1/720p/index.m3u8"},
-		{Height: 360, BitrateKbps: 800, PlaylistKey: "vid-1/360p/index.m3u8"},
+	want := events.VideoTranscoded{VideoID: testVID, DurationS: 30, HLSPrefix: testVID + "/", Renditions: []events.Rendition{
+		{Height: 720, BitrateKbps: 2800, PlaylistKey: testVID + "/720p/index.m3u8"},
+		{Height: 360, BitrateKbps: 800, PlaylistKey: testVID + "/360p/index.m3u8"},
 	}}
 	if got := h.pub.got[1].ev; !reflect.DeepEqual(got, want) {
 		t.Errorf("transcoded = %+v", got)
 	}
-	if !reflect.DeepEqual(h.store.downloads, []string{"raw/vid-1/source.mp4"}) ||
-		!reflect.DeepEqual(h.store.uploads, []string{"hls/vid-1"}) {
+	if !reflect.DeepEqual(h.store.downloads, []string{"raw/" + testVID + "/source.mp4"}) ||
+		!reflect.DeepEqual(h.store.uploads, []string{"hls/" + testVID}) {
 		t.Errorf("downloads=%v uploads=%v", h.store.downloads, h.store.uploads)
 	}
 	if len(h.slept) != 0 {
@@ -163,11 +165,11 @@ func TestHandleExhaustsRetries(t *testing.T) {
 		t.Fatalf("topics = %v", got)
 	}
 	failed := h.pub.got[1].ev.(events.VideoFailed)
-	if failed.VideoID != "vid-1" || !strings.Contains(failed.Reason, "ffmpeg: boom") {
+	if failed.VideoID != testVID || !strings.Contains(failed.Reason, "ffmpeg: boom") {
 		t.Errorf("failed = %+v", failed)
 	}
 	dl := h.pub.got[2].ev.(events.DeadLetter)
-	if dl.VideoID != "vid-1" || dl.Attempts != 4 || string(dl.Payload) != string(rec.Value) ||
+	if dl.VideoID != testVID || dl.Attempts != 4 || string(dl.Payload) != string(rec.Value) ||
 		!strings.Contains(dl.Error, "ffmpeg: boom") || dl.FailedAt.IsZero() {
 		t.Errorf("dead letter = %+v", dl)
 	}
@@ -205,6 +207,28 @@ func TestHandleBadMessageGoesToDLQ(t *testing.T) {
 	}
 	if h.tr.calls != 0 {
 		t.Error("transcoder must not run")
+	}
+}
+
+func TestHandleInvalidVideoIDGoesToDLQ(t *testing.T) {
+	for _, id := range []string{"", "vid-1", "0B9F6C1E-3C5A-4D2E-9A77-5F1D2C3B4A5E", "{" + testVID + "}"} {
+		h := newHarness(t)
+		rec, err := events.NewRecord(events.TopicVideoUploaded, events.VideoUploaded{VideoID: id, RawKey: "x/source.mp4"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.w.Handle(context.Background(), rec); err != nil {
+			t.Fatalf("id %q: %v", id, err)
+		}
+		if got := h.pub.topics(); !reflect.DeepEqual(got, []string{events.TopicVideoUploadedDLQ}) {
+			t.Fatalf("id %q: topics = %v", id, got)
+		}
+		if dl := h.pub.got[0].ev.(events.DeadLetter); dl.Attempts != 0 {
+			t.Errorf("id %q: attempts = %d", id, dl.Attempts)
+		}
+		if h.tr.calls != 0 || len(h.store.downloads) != 0 {
+			t.Errorf("id %q: must not process", id)
+		}
 	}
 }
 

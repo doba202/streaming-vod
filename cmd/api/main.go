@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -83,10 +84,17 @@ func run(log *slog.Logger) error {
 	cleaner := &upload.Cleaner{Videos: repo, Objects: store, BucketRaw: cfg.BucketRaw,
 		MaxAge: cfg.StaleUploadAfter, Now: time.Now, Log: log}
 
-	var wg sync.WaitGroup
+	var (
+		wg          sync.WaitGroup
+		consumerMu  sync.Mutex
+		consumerErr error
+	)
 	wg.Go(func() {
 		if err := consumer.Run(ctx, updater.Handle); err != nil {
 			log.Error("status consumer stopped", "err", err)
+			consumerMu.Lock()
+			consumerErr = err
+			consumerMu.Unlock()
 			stop()
 		}
 	})
@@ -102,6 +110,7 @@ func run(log *slog.Logger) error {
 	var serveErr error
 	select {
 	case <-ctx.Done():
+		stop() // lần Ctrl+C thứ hai dùng xử lý mặc định (thoát ngay)
 		log.Info("shutting down")
 	case serveErr = <-errc:
 		stop()
@@ -113,7 +122,15 @@ func run(log *slog.Logger) error {
 	}
 	wg.Wait()
 	if errors.Is(serveErr, http.ErrServerClosed) {
-		return nil
+		serveErr = nil
 	}
-	return serveErr
+	if serveErr != nil {
+		return serveErr
+	}
+	consumerMu.Lock()
+	defer consumerMu.Unlock()
+	if consumerErr != nil {
+		return fmt.Errorf("status consumer: %w", consumerErr)
+	}
+	return nil
 }
