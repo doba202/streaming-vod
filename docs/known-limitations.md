@@ -28,6 +28,9 @@ Gom từ review từng task (M0–M6). Các mục đã sửa ở M7: header bả
 - `httpx.DecodeJSON`: body quá 1 MiB trả `400` (không phải `413`); vài handler cũ trả nguyên thông báo lỗi của decoder; dữ liệu thừa sau object JSON bị bỏ qua.
 - `register` trả `409` khi email đã tồn tại (theo spec) — lộ email đã đăng ký.
 - Chưa test đồng thời cho chuyển trạng thái; `RevertQueued` không trả số dòng; `fail_reason` cũ vẫn còn khi video `queued` lại sau retry (UI chỉ hiện khi `failed`).
+- Chưa có rate limiting cho login/register (bước tiếp: `limit_req` ở nginx).
+- Endpoint JSON không bắt buộc `Content-Type: application/json`: origin cùng site khác cổng trên localhost có thể POST `text/plain` (xem ADR 0010).
+- CSP chỉ đặt `frame-ancestors`.
 - Presigned URL mọi part cùng TTL 1 giờ; cleaner xoá dòng DB trước khi abort multipart (crash giữa chừng → multipart mồ côi, MinIO tự dọn theo lifecycle nếu cấu hình).
 - Upload phụ đề cho video chưa `ready` được chấp nhận ([ADR 0014](decisions/0014-subtitles-srt-to-vtt.md)); upload phụ đề đúng lúc video bị xoá có thể để lại `hls/{id}/subs/*.vtt` mồ côi.
 - SRT: hai cue không có dòng trống ở giữa bị gộp; mili-giây lỗi bị bỏ qua; `NOTE` chứa `-->` lọt qua kiểm tra VTT.
@@ -43,6 +46,8 @@ Gom từ review từng task (M0–M6). Các mục đã sửa ở M7: header bả
 - Publish `video.transcoded` lỗi → làm lại toàn bộ transcode (tốn nhưng đúng); `RebalanceTimeout` 30 phút là trần cứng cho một job.
 - Runner chỉ kiểm số tấm sprite ≥ kỳ vọng (không kiểm số frame, poster tồn tại); preview lệch 1–2 giây ở ô cuối với fps lẻ; `ParseProbe` nhận stream ảnh bìa (height 0).
 - `Download` để lại file dở khi lỗi và bỏ qua lỗi `Close`; `EnsureBucket` coi `BucketAlreadyExists` là thành công; cắt chuỗi (`truncate`, `msg[:500]`) có thể cắt giữa ký tự UTF-8.
+- Event không mang id attempt/job: `video.failed` cũ do redeliver của lần thử trước có thể đánh dấu video đang retry là `failed` (admin retry lại).
+- MinIO ngừng quá ~3 phút làm hết ngân sách retry của transcode → video `failed`, khôi phục bằng retry.
 - Base image ghim tag, không ghim digest (trừ MinIO).
 - ClickHouse client đọc body lỗi không giới hạn; tên bảng trong `Insert` không validate (chỉ dùng hằng); fetch lỗi lặp không backoff.
 

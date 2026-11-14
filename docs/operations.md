@@ -71,6 +71,7 @@ Xoá sạch dữ liệu: `docker compose -f deploy/docker-compose.yml --env-file
 | `COOKIE_SECURE` | `false` | Bật thuộc tính `Secure` của cookie khi chạy HTTPS |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | `admin@streamfilm.local` / `admin-dev-password` | Dùng bởi `make seed-admin` và script e2e |
 | `CDN_BASE_URL` | `http://localhost:8088` | Tiền tố của URL trong `/play` |
+| `S3_BUCKET_HLS` | `hls` | Phải giữ `hls`: template nginx rewrite `/cdn/s/...` thành `/hls/...` trên MinIO |
 
 Các giá trị trong `.env.example` chỉ dành cho dev local và đã nằm trong repo: phải sinh secret và mật khẩu mới cho bất kỳ môi trường nào ngoài máy local. Đổi `CDN_SIGNING_SECRET` thì chạy lại `make up` để nginx và api cùng nhận giá trị mới; URL đã phát trước đó thành `403`.
 
