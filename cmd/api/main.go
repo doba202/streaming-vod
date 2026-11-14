@@ -1,6 +1,10 @@
 // Command api là HTTP API của Streamfilm.
-// M2: upload (presigned multipart), danh sách video cho admin, consumer cập nhật trạng thái,
-// job dọn upload bỏ dở. Chưa có auth: M3 thêm middleware role admin cho nhóm /api/admin.
+//
+//	api                                   chạy HTTP server (mặc định)
+//	api seed-admin [-email E] [-password P] tạo/đặt lại tài khoản admin (mặc định đọc ADMIN_EMAIL, ADMIN_PASSWORD)
+//	api sign -id ID [-file F] [-ttl 2h]     in URL CDN đã ký cho một video (debug, dev player)
+//
+// M3: đăng ký/đăng nhập (JWT cookie), /api/admin/* chỉ cho role admin, catalog và /play cho user.
 package main
 
 import (
@@ -15,15 +19,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"streamfilm/internal/auth"
 	"streamfilm/internal/catalog"
 	"streamfilm/internal/config"
 	"streamfilm/internal/db"
 	"streamfilm/internal/events"
-	"streamfilm/internal/httpx"
+	"streamfilm/internal/signing"
 	"streamfilm/internal/storage"
 	"streamfilm/internal/upload"
 	"streamfilm/migrations"
@@ -32,7 +35,16 @@ import (
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", "api")
 	slog.SetDefault(log)
-	if err := run(log); err != nil {
+	var err error
+	switch {
+	case len(os.Args) > 1 && os.Args[1] == "seed-admin":
+		err = seedAdmin(os.Args[2:])
+	case len(os.Args) > 1 && os.Args[1] == "sign":
+		err = signURL(os.Args[2:])
+	default:
+		err = run(log)
+	}
+	if err != nil {
 		log.Error("api stopped", "err", err)
 		os.Exit(1)
 	}
@@ -40,6 +52,15 @@ func main() {
 
 func run(log *slog.Logger) error {
 	cfg := config.Load()
+	// Kiểm tra secret trước khi kết nối gì: thiếu thì dừng ngay với thông báo rõ.
+	tokens, err := auth.NewTokens(cfg.JWTSecret, auth.SessionTTL, time.Now)
+	if err != nil {
+		return err
+	}
+	signer, err := signing.NewSigner(cfg.CDNSigningSecret, signing.TTL, time.Now)
+	if err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -74,11 +95,14 @@ func run(log *slog.Logger) error {
 	svc := &upload.Service{Videos: repo, Objects: store, Pub: producer, BucketRaw: cfg.BucketRaw,
 		Now: time.Now, NewID: uuid.NewString, Log: log}
 
-	r := chi.NewRouter()
-	r.Use(middleware.RequestID, middleware.Recoverer, httpx.RequestLogger(log))
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
-	(&upload.Handler{Svc: svc, Log: log}).Routes(r)
-	(&catalog.AdminHandler{Videos: repo, Log: log}).Routes(r)
+	authSvc := &auth.Service{Users: auth.NewRepo(pool), Tokens: tokens, NewID: uuid.NewString}
+	handler := newRouter(log, routes{
+		Tokens: tokens,
+		Auth:   &auth.Handler{Svc: authSvc, SecureCookie: cfg.CookieSecure, Log: log},
+		Viewer: &catalog.ViewerHandler{Videos: repo, Signer: signer, CDNBaseURL: cfg.CDNBaseURL, Log: log},
+		Upload: &upload.Handler{Svc: svc, Log: log},
+		Admin:  &catalog.AdminHandler{Videos: repo, Log: log},
+	})
 
 	updater := &catalog.StatusUpdater{Store: repo, Log: log}
 	cleaner := &upload.Cleaner{Videos: repo, Objects: store, BucketRaw: cfg.BucketRaw,
@@ -100,7 +124,7 @@ func run(log *slog.Logger) error {
 	})
 	wg.Go(func() { cleaner.Run(ctx, cfg.CleanupInterval) })
 
-	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: r, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() {
 		log.Info("http listening", "addr", cfg.HTTPAddr)

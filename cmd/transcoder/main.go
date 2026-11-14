@@ -92,8 +92,8 @@ func runFile(ctx context.Context, cfg config.Config, input, id string) error {
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("%s/hls/%s/master.m3u8", cfg.CDNBaseURL, id)
-	slog.Info("upload done", "video_id", id, "files", n, "url", url)
-	fmt.Println(url)
+	// M3: nginx chỉ phục vụ URL có chữ ký; lấy URL bằng `make sign-url ID=...`.
+	slog.Info("upload done", "video_id", id, "files", n, "prefix", cfg.BucketHLS+"/"+id+"/")
+	fmt.Printf("uploaded %s/%s/ - signed URL: make sign-url ID=%s\n", cfg.BucketHLS, id, id)
 	return nil
 }

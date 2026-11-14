@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f deploy/docker-compose.yml --env-file .env
 
-.PHONY: env up down logs logs-app ps test test-short build sample transcode run-api run-worker e2e-m2
+.PHONY: env up down logs logs-app ps test test-short build sample transcode run-api run-worker e2e-m2 seed-admin sign-url
 
 # Tạo .env từ .env.example; nếu .env đã có thì bổ sung các khoá mới (vd. khoá M3) mà không ghi đè giá trị cũ.
 env:
@@ -54,6 +54,14 @@ run-api: env
 # Chạy transcoder worker trên host (cần FFmpeg trên máy; dừng service transcoder trong compose trước nếu đã có).
 run-worker: env
 	set -a; . ./.env; set +a; go run ./cmd/transcoder worker
+
+# Tạo hoặc đặt lại admin (ADMIN_EMAIL / ADMIN_PASSWORD trong .env) trong container api đang chạy.
+seed-admin: env
+	set -a; . ./.env; set +a; $(COMPOSE) exec -T -e ADMIN_EMAIL -e ADMIN_PASSWORD api api seed-admin
+
+# In URL CDN đã ký cho một video: make sign-url ID=<video_id>
+sign-url: env
+	@$(COMPOSE) exec -T api api sign -id $(ID)
 
 # E2E M2: create → upload presigned → complete → ready → HLS qua nginx.
 e2e-m2:
