@@ -154,7 +154,7 @@ func TestRepo(t *testing.T) {
 	})
 }
 
-func TestRepoListReady(t *testing.T) {
+func TestRepoSearchBrowse(t *testing.T) {
 	r := newTestRepo(t)
 	ctx := context.Background()
 	for _, id := range []string{idA, idB, idC} {
@@ -173,16 +173,16 @@ func TestRepoListReady(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	all, err := r.ListReady(ctx, 10, 0)
+	all, err := r.Search(ctx, SearchParams{Limit: 10})
 	if err != nil || len(all) != 2 {
-		t.Fatalf("ListReady = %+v, err = %v", all, err)
+		t.Fatalf("Search = %+v, err = %v", all, err)
 	}
 	for _, v := range all {
 		if v.Status != StatusReady || v.ID == idB {
 			t.Errorf("non-ready video in catalog: %+v", v)
 		}
 	}
-	page2, err := r.ListReady(ctx, 1, 1)
+	page2, err := r.Search(ctx, SearchParams{Limit: 1, Offset: 1})
 	if err != nil || len(page2) != 1 || page2[0].ID != all[1].ID {
 		t.Errorf("page 2 = %+v, err = %v", page2, err)
 	}

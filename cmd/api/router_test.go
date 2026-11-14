@@ -17,7 +17,10 @@ import (
 type emptyStore struct{}
 
 func (emptyStore) List(context.Context, catalog.ListFilter) ([]catalog.Video, error) { return nil, nil }
-func (emptyStore) ListReady(context.Context, int, int) ([]catalog.Video, error)      { return nil, nil }
+func (emptyStore) Search(context.Context, catalog.SearchParams) ([]catalog.Video, error) {
+	return nil, nil
+}
+func (emptyStore) Genres(context.Context) ([]string, error) { return nil, nil }
 func (emptyStore) Get(context.Context, string) (catalog.Video, error) {
 	return catalog.Video{}, catalog.ErrNotFound
 }
@@ -47,6 +50,9 @@ func TestRouterAuthz(t *testing.T) {
 		{"GET", "/healthz", "", 200},
 		{"GET", "/api/videos", "", 401},
 		{"GET", "/api/videos", viewer, 200},
+		{"GET", "/api/videos?q=tro+choi&genre=drama&year=2024", viewer, 200},
+		{"GET", "/api/genres", "", 401},
+		{"GET", "/api/genres", viewer, 200},
 		{"GET", "/api/videos/11111111-1111-1111-1111-111111111111/play", "", 401},
 		{"GET", "/api/videos/11111111-1111-1111-1111-111111111111/play", viewer, 404},
 		{"GET", "/api/admin/videos", "", 401},

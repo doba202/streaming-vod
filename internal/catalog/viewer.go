@@ -3,10 +3,13 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -16,7 +19,8 @@ import (
 
 // ViewerStore là phần của Repo mà endpoint người xem cần.
 type ViewerStore interface {
-	ListReady(ctx context.Context, limit, offset int) ([]Video, error)
+	Search(ctx context.Context, p SearchParams) ([]Video, error)
+	Genres(ctx context.Context) ([]string, error)
 	Get(ctx context.Context, id string) (Video, error)
 	Renditions(ctx context.Context, id string) ([]Rendition, error)
 }
@@ -37,8 +41,17 @@ type ViewerHandler struct {
 // PageSize: số video mỗi trang của GET /api/videos.
 const PageSize = 20
 
+// Giới hạn tham số tìm kiếm của GET /api/videos.
+const (
+	MaxQueryLen = 100 // rune
+	MaxGenreLen = 50  // rune
+	MinYear     = 1888
+	MaxYear     = 2100
+)
+
 func (h *ViewerHandler) Routes(r chi.Router) {
 	r.Get("/api/videos", h.list)
+	r.Get("/api/genres", h.genres)
 	r.Get("/api/videos/{id}", h.get)
 	r.Get("/api/videos/{id}/play", h.play)
 }
@@ -83,9 +96,12 @@ func toViewerJSON(v Video) ViewerVideoJSON {
 		Year: v.Year, DurationS: v.DurationS, CreatedAt: v.CreatedAt}
 }
 
+// list: GET /api/videos?q=&genre=&year=&page=. Không có q thì duyệt catalog (mới nhất trước);
+// có q thì tìm không dấu, xếp theo độ liên quan (Repo.Search).
 func (h *ViewerHandler) list(w http.ResponseWriter, r *http.Request) {
+	qs := r.URL.Query()
 	page := 1
-	if s := r.URL.Query().Get("page"); s != "" {
+	if s := qs.Get("page"); s != "" {
 		n, err := strconv.Atoi(s)
 		if err != nil || n < 1 || n > 1000 {
 			httpx.WriteError(w, http.StatusBadRequest, "page must be between 1 and 1000")
@@ -93,10 +109,28 @@ func (h *ViewerHandler) list(w http.ResponseWriter, r *http.Request) {
 		}
 		page = n
 	}
+	p := SearchParams{Query: strings.TrimSpace(qs.Get("q")), Genre: strings.TrimSpace(qs.Get("genre"))}
+	if utf8.RuneCountInString(p.Query) > MaxQueryLen {
+		httpx.WriteError(w, http.StatusBadRequest, fmt.Sprintf("q must be at most %d characters", MaxQueryLen))
+		return
+	}
+	if utf8.RuneCountInString(p.Genre) > MaxGenreLen {
+		httpx.WriteError(w, http.StatusBadRequest, fmt.Sprintf("genre must be at most %d characters", MaxGenreLen))
+		return
+	}
+	if s := qs.Get("year"); s != "" {
+		y, err := strconv.Atoi(s)
+		if err != nil || y < MinYear || y > MaxYear {
+			httpx.WriteError(w, http.StatusBadRequest, fmt.Sprintf("year must be between %d and %d", MinYear, MaxYear))
+			return
+		}
+		p.Year = y
+	}
 	// Lấy dư 1 bản ghi để biết còn trang sau.
-	vs, err := h.Videos.ListReady(r.Context(), PageSize+1, (page-1)*PageSize)
+	p.Limit, p.Offset = PageSize+1, (page-1)*PageSize
+	vs, err := h.Videos.Search(r.Context(), p)
 	if err != nil {
-		h.Log.Error("list ready videos", "err", err)
+		h.Log.Error("search videos", "q", p.Query, "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -109,6 +143,20 @@ func (h *ViewerHandler) list(w http.ResponseWriter, r *http.Request) {
 		out = append(out, toViewerJSON(v))
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"videos": out, "page": page, "has_more": hasMore})
+}
+
+// genres: GET /api/genres → {"genres": [...]} các thể loại của video ready.
+func (h *ViewerHandler) genres(w http.ResponseWriter, r *http.Request) {
+	gs, err := h.Videos.Genres(r.Context())
+	if err != nil {
+		h.Log.Error("list genres", "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if gs == nil {
+		gs = []string{}
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"genres": gs})
 }
 
 // readyVideo trả video nếu tồn tại và ready; ngược lại ghi 404 (người xem không thấy video chưa ready).

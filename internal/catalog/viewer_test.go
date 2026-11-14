@@ -16,22 +16,27 @@ import (
 
 type fakeViewerStore struct {
 	videos      []Video // thứ tự = thứ tự catalog
+	genres      []string
+	last        SearchParams
 	limit, offs int
 }
 
-func (f *fakeViewerStore) ListReady(_ context.Context, limit, offset int) ([]Video, error) {
-	f.limit, f.offs = limit, offset
+// Search giả: chỉ lọc ready và phân trang; tham số nhận được ghi vào last.
+func (f *fakeViewerStore) Search(_ context.Context, p SearchParams) ([]Video, error) {
+	f.last, f.limit, f.offs = p, p.Limit, p.Offset
 	var ready []Video
 	for _, v := range f.videos {
 		if v.Status == StatusReady {
 			ready = append(ready, v)
 		}
 	}
-	if offset >= len(ready) {
+	if p.Offset >= len(ready) {
 		return nil, nil
 	}
-	return ready[offset:min(offset+limit, len(ready))], nil
+	return ready[p.Offset:min(p.Offset+p.Limit, len(ready))], nil
 }
+
+func (f *fakeViewerStore) Genres(context.Context) ([]string, error) { return f.genres, nil }
 
 func (f *fakeViewerStore) Get(_ context.Context, id string) (Video, error) {
 	for _, v := range f.videos {
@@ -138,5 +143,49 @@ func TestViewerGetAndPlay(t *testing.T) {
 		if rec := get(h, path); rec.Code != http.StatusNotFound {
 			t.Errorf("%s: code = %d, want 404", path, rec.Code)
 		}
+	}
+}
+
+func TestViewerSearchParams(t *testing.T) {
+	store := &fakeViewerStore{}
+	h := newViewerRouter(store)
+
+	rec := get(h, "/api/videos?q=%20tro%20choi%20&genre=H%C3%A0nh%20%C4%91%E1%BB%99ng&year=2021&page=3")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	want := SearchParams{Query: "tro choi", Genre: "Hành động", Year: 2021, Limit: PageSize + 1, Offset: 2 * PageSize}
+	if store.last != want {
+		t.Errorf("params = %+v, want %+v", store.last, want)
+	}
+	if !strings.Contains(rec.Body.String(), `"videos":[]`) {
+		t.Errorf("không có kết quả thì videos phải là []: %s", rec.Body)
+	}
+
+	get(h, "/api/videos")
+	if store.last != (SearchParams{Limit: PageSize + 1}) {
+		t.Errorf("không tham số: %+v", store.last)
+	}
+
+	long := strings.Repeat("ă", MaxQueryLen+1)
+	for _, q := range []string{"?year=abc", "?year=1800", "?year=2101", "?q=" + long,
+		"?genre=" + strings.Repeat("g", MaxGenreLen+1)} {
+		if rec := get(h, "/api/videos"+q); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: code = %d, want 400", q, rec.Code)
+		}
+	}
+	if rec := get(h, "/api/videos?q="+strings.Repeat("ă", MaxQueryLen)); rec.Code != http.StatusOK {
+		t.Errorf("q dài đúng %d ký tự phải hợp lệ: %d", MaxQueryLen, rec.Code)
+	}
+}
+
+func TestViewerGenres(t *testing.T) {
+	rec := get(newViewerRouter(&fakeViewerStore{}), "/api/genres")
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"genres":[]}` {
+		t.Errorf("empty: %d %s", rec.Code, rec.Body)
+	}
+	rec = get(newViewerRouter(&fakeViewerStore{genres: []string{"Gia đình", "Hành động"}}), "/api/genres")
+	if strings.TrimSpace(rec.Body.String()) != `{"genres":["Gia đình","Hành động"]}` {
+		t.Errorf("genres: %s", rec.Body)
 	}
 }
