@@ -112,6 +112,57 @@ services:
       interval: 5s
       retries: 20
 
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/docker/api.Dockerfile
+    image: streamfilm-api:dev
+    environment:
+      HTTP_ADDR: ":8000"
+      DATABASE_URL: postgres://streamfilm:${POSTGRES_PASSWORD}@postgres:5432/streamfilm?sslmode=disable
+      KAFKA_BROKERS: kafka:9092
+      S3_ENDPOINT: http://minio:9000
+      # Presigned URL được ký cho địa chỉ mà máy host nhìn thấy (chữ ký gắn với Host).
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_REGION: ${S3_REGION}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET_RAW: ${S3_BUCKET_RAW}
+      S3_BUCKET_HLS: ${S3_BUCKET_HLS}
+      STALE_UPLOAD_AFTER: 24h
+      CLEANUP_INTERVAL: 1h
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+      kafka-init: { condition: service_completed_successfully }
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/healthz | grep -q ok"]
+      interval: 5s
+      retries: 20
+
+  transcoder:
+    build:
+      context: ..
+      dockerfile: deploy/docker/transcoder.Dockerfile
+    image: streamfilm-transcoder:dev
+    command: ["worker"]
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ${S3_REGION}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET_RAW: ${S3_BUCKET_RAW}
+      S3_BUCKET_HLS: ${S3_BUCKET_HLS}
+      WORK_DIR: /tmp
+    depends_on:
+      minio-init: { condition: service_completed_successfully }
+      kafka-init: { condition: service_completed_successfully }
+    restart: unless-stopped
+    stop_grace_period: 30s
+
 volumes:
   pgdata:
   miniodata:

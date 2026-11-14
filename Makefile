@@ -1,20 +1,23 @@
 COMPOSE := docker compose -f deploy/docker-compose.yml --env-file .env
 
-.PHONY: env up down logs ps test test-short build sample transcode run-api run-worker
+.PHONY: env up down logs logs-app ps test test-short build sample transcode run-api run-worker e2e-m2
 
 env:
 	@test -f .env || cp .env.example .env
 
 # Các service one-shot (minio-init, kafka-init) thoát với mã 0 nên không dùng --wait cho chúng.
 up: env
-	$(COMPOSE) up -d
-	$(COMPOSE) up -d --wait postgres minio kafka console clickhouse nginx
+	$(COMPOSE) up -d --build
+	$(COMPOSE) up -d --wait postgres minio kafka console clickhouse nginx api transcoder
 
 down:
 	$(COMPOSE) down
 
 logs:
 	$(COMPOSE) logs -f --tail=100
+
+logs-app:
+	$(COMPOSE) logs -f --tail=100 api transcoder
 
 ps:
 	$(COMPOSE) ps
@@ -47,3 +50,8 @@ run-api: env
 # Chạy transcoder worker trên host (cần FFmpeg trên máy; dừng service transcoder trong compose trước nếu đã có).
 run-worker: env
 	set -a; . ./.env; set +a; go run ./cmd/transcoder worker
+
+# E2E M2: create → upload presigned → complete → ready → HLS qua nginx.
+e2e-m2:
+	@test -f tmp/sample.mp4 || $(MAKE) sample
+	./scripts/e2e-m2.sh tmp/sample.mp4
