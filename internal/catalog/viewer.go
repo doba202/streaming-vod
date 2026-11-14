@@ -172,7 +172,7 @@ func (h *ViewerHandler) list(w http.ResponseWriter, r *http.Request) {
 	p.Limit, p.Offset = PageSize+1, (page-1)*PageSize
 	vs, err := h.Videos.Search(r.Context(), p)
 	if err != nil {
-		h.Log.Error("search videos", "q", p.Query, "err", err)
+		h.Log.ErrorContext(r.Context(), "search videos", "q", p.Query, "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -191,7 +191,7 @@ func (h *ViewerHandler) list(w http.ResponseWriter, r *http.Request) {
 func (h *ViewerHandler) genres(w http.ResponseWriter, r *http.Request) {
 	gs, err := h.Videos.Genres(r.Context())
 	if err != nil {
-		h.Log.Error("list genres", "err", err)
+		h.Log.ErrorContext(r.Context(), "list genres", "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -214,7 +214,7 @@ func (h *ViewerHandler) readyVideo(w http.ResponseWriter, r *http.Request) (Vide
 		return Video{}, false
 	}
 	if err != nil {
-		h.Log.Error("get video", "video_id", id, "err", err)
+		h.Log.ErrorContext(r.Context(), "get video", "video_id", id, "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return Video{}, false
 	}
@@ -228,7 +228,7 @@ func (h *ViewerHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	rs, err := h.Videos.Renditions(r.Context(), v.ID)
 	if err != nil {
-		h.Log.Error("get renditions", "video_id", v.ID, "err", err)
+		h.Log.ErrorContext(r.Context(), "get renditions", "video_id", v.ID, "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -246,13 +246,13 @@ func (h *ViewerHandler) play(w http.ResponseWriter, r *http.Request) {
 	}
 	path, exp, err := h.Signer.Path(v.ID, "master.m3u8")
 	if err != nil {
-		h.Log.Error("sign play url", "video_id", v.ID, "err", err)
+		h.Log.ErrorContext(r.Context(), "sign play url", "video_id", v.ID, "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	subs, err := h.Videos.Subtitles(r.Context(), v.ID)
 	if err != nil {
-		h.Log.Error("list subtitles", "video_id", v.ID, "err", err)
+		h.Log.ErrorContext(r.Context(), "list subtitles", "video_id", v.ID, "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -266,7 +266,7 @@ func (h *ViewerHandler) play(w http.ResponseWriter, r *http.Request) {
 	// resume_at lỗi thì phát từ đầu: không vì tiến độ mà chặn việc xem.
 	if id, ok := auth.FromContext(r.Context()); ok {
 		if at, err := h.Progress.ResumeAt(r.Context(), id.UserID, v.ID); err != nil {
-			h.Log.Warn("resume_at", "video_id", v.ID, "err", err)
+			h.Log.WarnContext(r.Context(), "resume_at", "video_id", v.ID, "err", err)
 		} else {
 			out.ResumeAt = at
 		}
@@ -300,7 +300,7 @@ func (h *ViewerHandler) continueWatching(w http.ResponseWriter, r *http.Request)
 	}
 	entries, err := h.Progress.ContinueWatching(r.Context(), id.UserID, ContinueWatchingLimit)
 	if err != nil {
-		h.Log.Error("continue watching", "err", err)
+		h.Log.ErrorContext(r.Context(), "continue watching", "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -310,7 +310,7 @@ func (h *ViewerHandler) continueWatching(w http.ResponseWriter, r *http.Request)
 	}
 	vs, err := h.Videos.ReadyByIDs(r.Context(), ids)
 	if err != nil {
-		h.Log.Error("continue watching videos", "err", err)
+		h.Log.ErrorContext(r.Context(), "continue watching videos", "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}

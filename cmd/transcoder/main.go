@@ -15,13 +15,14 @@ import (
 	"syscall"
 
 	"streamfilm/internal/config"
+	"streamfilm/internal/logging"
 	"streamfilm/internal/storage"
 	"streamfilm/internal/transcode"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", "transcoder")
-	slog.SetDefault(logger)
+	// Lệnh file chỉ log ra stdout; worker tee thêm vào app.logs (runWorker).
+	slog.SetDefault(logging.New("transcoder", os.Stdout, nil))
 	if len(os.Args) < 2 {
 		usage()
 	}

@@ -171,7 +171,7 @@ func (h *SubtitleHandler) upload(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, id, "save subtitle", err)
 		return
 	}
-	h.Log.Info("subtitle uploaded", "video_id", id, "lang", lang, "bytes", len(vtt))
+	h.Log.InfoContext(r.Context(), "subtitle uploaded", "video_id", id, "lang", lang, "bytes", len(vtt))
 	httpx.WriteJSON(w, http.StatusCreated, AdminSubtitleJSON{Lang: s.Lang, Label: s.Label, VTTKey: s.VTTKey})
 }
 

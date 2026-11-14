@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"streamfilm/internal/config"
 	"streamfilm/internal/events"
+	"streamfilm/internal/logging"
 	"streamfilm/internal/transcode"
 	"streamfilm/internal/worker"
 )
@@ -16,6 +18,17 @@ import (
 // runWorker consume video.uploaded (group "transcoder"), mỗi lần một job.
 // Scale ngang bằng cách chạy thêm worker, tối đa bằng số partition (3).
 func runWorker(ctx context.Context, cfg config.Config) error {
+	// M6: log ra stdout và app.logs; đặt trước khi tạo consumer/worker vì chúng dùng slog.Default().
+	logSink, err := logging.DialKafka(cfg.KafkaBrokers)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		logSink.Close()
+		logging.New("transcoder", os.Stdout, nil).Info("app.logs sink closed", "dropped", logSink.Dropped())
+	}()
+	slog.SetDefault(logging.New("transcoder", os.Stdout, logSink))
+
 	producer, err := events.NewProducer(cfg.KafkaBrokers)
 	if err != nil {
 		return err

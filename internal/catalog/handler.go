@@ -76,7 +76,7 @@ func (h *AdminHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	vs, err := h.Videos.List(r.Context(), f)
 	if err != nil {
-		h.Log.Error("list videos", "err", err)
+		h.Log.ErrorContext(r.Context(), "list videos", "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -99,13 +99,13 @@ func (h *AdminHandler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Log.Error("get video", "video_id", id, "err", err)
+		h.Log.ErrorContext(r.Context(), "get video", "video_id", id, "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	rs, err := h.Videos.Renditions(r.Context(), id)
 	if err != nil {
-		h.Log.Error("get renditions", "video_id", id, "err", err)
+		h.Log.ErrorContext(r.Context(), "get renditions", "video_id", id, "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}

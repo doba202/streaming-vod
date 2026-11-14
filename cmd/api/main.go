@@ -27,6 +27,7 @@ import (
 	"streamfilm/internal/config"
 	"streamfilm/internal/db"
 	"streamfilm/internal/events"
+	"streamfilm/internal/logging"
 	"streamfilm/internal/playback"
 	"streamfilm/internal/signing"
 	"streamfilm/internal/storage"
@@ -35,7 +36,8 @@ import (
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", "api")
+	// Lệnh phụ (seed-admin, sign) chỉ log ra stdout; server (run) tee thêm vào app.logs.
+	log := logging.New("api", os.Stdout, nil)
 	slog.SetDefault(log)
 	var err error
 	switch {
@@ -63,6 +65,18 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// M6: log ra stdout và đồng thời vào app.logs (spec §7). Defer đầu tiên nên sink đóng sau cùng,
+	// gom được cả log lúc tắt; Kafka chậm/chết thì dòng log bị bỏ, không chặn request.
+	logSink, err := logging.DialKafka(cfg.KafkaBrokers)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		logSink.Close()
+		logging.New("api", os.Stdout, nil).Info("app.logs sink closed", "dropped", logSink.Dropped())
+	}()
+	log = logging.New("api", os.Stdout, logSink)
+	slog.SetDefault(log)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

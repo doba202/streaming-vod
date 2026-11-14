@@ -65,7 +65,7 @@ func (h *Handler) event(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.Log.Error("get video", "video_id", in.VideoID, "err", err)
+		h.Log.ErrorContext(r.Context(), "get video", "video_id", in.VideoID, "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -79,7 +79,7 @@ func (h *Handler) event(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err != nil {
-			h.Log.Error("save progress", "video_id", v.ID, "err", err)
+			h.Log.ErrorContext(r.Context(), "save progress", "video_id", v.ID, "err", err)
 			httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
