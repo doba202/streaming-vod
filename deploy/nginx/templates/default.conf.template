@@ -1,9 +1,17 @@
 # Cổng vào duy nhất của trình duyệt (M4, ADR 0011): SPA người xem ở /, API ở /api/ (proxy tới api:8000),
-# "CDN" giả lập ở /cdn/ (chỉ phục vụ HLS qua URL có chữ ký, M3). Cùng origin nên cookie HttpOnly
+# "CDN" giả lập ở /cdn/ (chỉ phục vụ HLS, poster, sprite, phụ đề qua URL có chữ ký, M3/M5). Content-Type
+# lấy từ object MinIO (storage.ContentTypeFor: .m3u8, .ts, .jpg → image/jpeg, .vtt → text/vtt). Cùng origin nên cookie HttpOnly
 # của API dùng được mà không cần CORS.
 # Đây là template: lúc khởi động, image nginx chạy envsubst (chỉ với biến khớp NGINX_ENVSUBST_FILTER=^CDN_)
 # rồi ghi ra /etc/nginx/conf.d/default.conf. Biến nginx ($sl_exp, $uri, ...) giữ nguyên.
 proxy_cache_path /var/cache/nginx/hls levels=1:2 keys_zone=hls:10m max_size=1g inactive=7d use_temp_path=off;
+
+# Phụ đề (subs/{lang}.vtt) bị admin upload lại đè cùng key bất cứ lúc nào (M5): không cache ở CDN để người xem
+# thấy bản mới ngay. Segment, playlist, poster, sprite chỉ đổi khi transcode lại nên vẫn cache 7 ngày.
+map $sl_file $sl_no_cache {
+    ~^subs/  1;
+    default  0;
+}
 
 server {
     listen 80;
@@ -29,6 +37,8 @@ server {
         proxy_pass http://minio:9000;
         proxy_cache hls;
         proxy_cache_valid 200 7d;
+        proxy_no_cache $sl_no_cache;
+        proxy_cache_bypass $sl_no_cache;
         # Không đưa chữ ký vào cache key: mọi người xem dùng chung một bản cache của segment.
         proxy_cache_key "$sl_vid/$sl_file";
     }

@@ -20,7 +20,8 @@ const nginxImage = "nginx:1.27-alpine"
 // originConf: nginx thứ hai đóng vai MinIO (alias "minio", cổng 9000), phục vụ file tĩnh
 // dưới /srv/hls/... giống bucket hls cho đọc ẩn danh (ADR 0002), và đóng vai api (alias "api",
 // cổng 8000) trả lại URI nhận được để kiểm tra proxy /api/ giữ nguyên đường dẫn và query.
-const originConf = `server { listen 9000; root /srv; }
+const originConf = `server { listen 9000; root /srv;
+  types { application/vnd.apple.mpegurl m3u8; video/mp2t ts; image/jpeg jpg; text/vtt vtt; } }
 server { listen 8000; location / { return 200 "api:$request_uri"; } }`
 
 // TestNginxSecureLinkParity chạy đúng template nginx của repo và kiểm tra nginx chấp nhận
@@ -48,6 +49,12 @@ func TestNginxSecureLinkParity(t *testing.T) {
 				ContainerFilePath: "/srv/hls/" + testVID + "/master.m3u8", FileMode: 0o644},
 			testcontainers.ContainerFile{Reader: strings.NewReader("segment-bytes"),
 				ContainerFilePath: "/srv/hls/" + testVID + "/720p/seg_000.ts", FileMode: 0o644},
+			testcontainers.ContainerFile{Reader: strings.NewReader("jpeg-bytes"),
+				ContainerFilePath: "/srv/hls/" + testVID + "/poster.jpg", FileMode: 0o644},
+			testcontainers.ContainerFile{Reader: strings.NewReader("WEBVTT\n\nsprite_001.jpg#xywh=0,0,160,90\n"),
+				ContainerFilePath: "/srv/hls/" + testVID + "/thumbnails.vtt", FileMode: 0o644},
+			testcontainers.ContainerFile{Reader: strings.NewReader("WEBVTT\n\nold"),
+				ContainerFilePath: "/srv/hls/" + testVID + "/subs/vi.vtt", FileMode: 0o644},
 		),
 		testcontainers.WithWaitStrategy(wait.ForListeningPort("9000/tcp"), wait.ForListeningPort("8000/tcp")),
 	)
@@ -143,6 +150,38 @@ func TestNginxSecureLinkParity(t *testing.T) {
 	resp.Body.Close()
 	if got := resp.Header.Get("X-Cache-Status"); got != "HIT" {
 		t.Errorf("X-Cache-Status = %q, want HIT", got)
+	}
+
+	// M5: poster, thumbnails.vtt, phụ đề đi chung prefix ký; Content-Type giữ nguyên từ origin (MinIO).
+	for file, ct := range map[string]string{"poster.jpg": "image/jpeg", "thumbnails.vtt": "text/vtt", "subs/vi.vtt": "text/vtt"} {
+		resp, err := http.Get(endpoint + SignedPath(testSecret, testVID, file, exp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != ct {
+			t.Errorf("%s: %d %q, want 200 %q", file, resp.StatusCode, resp.Header.Get("Content-Type"), ct)
+		}
+	}
+	// Phụ đề không cache ở CDN: admin upload lại thì lần tải sau thấy bản mới ngay.
+	subs := SignedPath(testSecret, testVID, "subs/vi.vtt", exp)
+	if err := origin.CopyToContainer(ctx, []byte("WEBVTT\n\nnew"), "/srv/hls/"+testVID+"/subs/vi.vtt", 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.Get(endpoint + subs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) != "WEBVTT\n\nnew" || resp.Header.Get("X-Cache-Status") != "BYPASS" {
+		t.Errorf("subs sau khi đổi: %q, X-Cache-Status = %q, want bản mới và BYPASS", body, resp.Header.Get("X-Cache-Status"))
+	}
+	poster := SignedPath(testSecret, testVID, "poster.jpg", exp+60)
+	if resp, err := http.Get(endpoint + poster); err != nil || resp.Header.Get("X-Cache-Status") != "HIT" {
+		t.Errorf("poster lần hai phải HIT: %v %v", err, resp.Header.Get("X-Cache-Status"))
+	} else {
+		resp.Body.Close()
 	}
 }
 
